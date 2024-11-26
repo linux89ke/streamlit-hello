@@ -28,8 +28,8 @@ if uploaded_file:
         st.subheader("Data Segmentation by Platform and Region")
         
         # Extract rows for Kenya and Uganda separately
-        kenya_data = df[df["Country"].str.contains("Kenya", case=False, na=False)]
-        uganda_data = df[df["Country"].str.contains("Uganda", case=False, na=False)]
+        kenya_data = df[df["KE"].str.contains("Kenya", case=False, na=False)]
+        uganda_data = df[df["UG"].str.contains("Uganda", case=False, na=False)]
         
         # Process Seller Center Data
         st.write("**Seller Center Analysis**")
