@@ -20,3 +20,4 @@ requests
 fuzzywuzzy
 matplotlib
 plotly
+streamlit-aggrid
