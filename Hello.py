@@ -1,5 +1,7 @@
 import pandas as pd
 import streamlit as st
+import streamlit_authenticator as stauth
+import os
 from io import BytesIO
 from datetime import datetime
 
@@ -42,7 +44,37 @@ def load_config_files():
 # Initialize the app
 st.title("Product Validation Tool")
 
-# Load configuration files
+# Load environment variables (for cloud deployment)
+def load_auth_config():
+    usernames = os.getenv('ST_AUTH_USERNAMES', 'user1,user2').split(',')
+    passwords = os.getenv('ST_AUTH_PASSWORDS', 'password1,password2').split(',')
+    names = os.getenv('ST_AUTH_NAMES', 'User One,User Two').split(',')
+    return {'usernames': usernames, 'passwords': passwords, 'names': names}
+
+# Load the authentication configuration
+auth_data = load_auth_config()
+
+# Hash passwords
+hashed_passwords = stauth.Hasher(auth_data['passwords']).generate()
+
+# Create authenticator object
+authenticator = stauth.Authenticate(
+    auth_data['names'],
+    auth_data['usernames'],
+    hashed_passwords,
+    cookie_name="auth_cookie",
+    key=os.getenv('ST_AUTH_KEY', 'default_secure_key')
+)
+
+# Show login widget
+name, authentication_status = authenticator.login("Login", "main")
+
+# If authentication fails, stop execution
+if not authentication_status:
+    st.error("Authentication failed. Please try again.")
+    st.stop()
+
+# If authentication is successful, proceed with loading config files and data
 config_data = load_config_files()
 
 # Load and process flags data
@@ -109,8 +141,8 @@ if uploaded_file is not None:
                 keywords = perfumes_data[perfumes_data['BRAND'] == brand]['KEYWORD'].tolist()
                 for keyword in keywords:
                     if isinstance(row['NAME'], str) and keyword.lower() in row['NAME'].lower():
-                        perfume_price = perfumes_data.loc[
-                            (perfumes_data['BRAND'] == brand) & 
+                        perfume_price = perfumes_data.loc[(
+                            perfumes_data['BRAND'] == brand) & 
                             (perfumes_data['KEYWORD'] == keyword), 'PRICE'].values[0]
                         if row['GLOBAL_PRICE'] < perfume_price:
                             flagged_perfumes.append(row)
@@ -119,7 +151,7 @@ if uploaded_file is not None:
         # Blacklist and brand name checks
         flagged_blacklisted = data[data['NAME'].apply(lambda name: 
             any(black_word.lower() in str(name).lower().split() for black_word in blacklisted_words))]
-        
+
         brand_in_name = data[data.apply(lambda row: 
             isinstance(row['BRAND'], str) and isinstance(row['NAME'], str) and 
             row['BRAND'].lower() in row['NAME'].lower(), axis=1)]
@@ -186,62 +218,30 @@ if uploaded_file is not None:
         # Show detailed results in expanders
         validation_results = [
             ("Missing COLOR", missing_color),
-            ("Missing BRAND or NAME", missing_brand_or_name),
+            ("Missing BRAND/NAME", missing_brand_or_name),
             ("Single-word NAME", single_word_name),
-            ("Generic BRAND Issues", generic_brand_issues),
-            ("Perfume Price Issues", pd.DataFrame(flagged_perfumes)),
-            ("Blacklisted Words", flagged_blacklisted),
-            ("Brand in Name", brand_in_name),
-            ("Duplicate Products", duplicate_products)
+            ("Generic BRAND issues", generic_brand_issues),
+            ("Blacklisted words", flagged_blacklisted),
+            ("Brand in NAME", brand_in_name),
+            ("Duplicate products", duplicate_products)
         ]
-
+        
         for title, df in validation_results:
-            with st.expander(f"{title} ({len(df)} products)"):
-                if not df.empty:
-                    st.dataframe(df)
-                else:
-                    st.write("No issues found")
-
-        # Export functions
-        def to_excel(df1, df2, sheet1_name="ProductSets", sheet2_name="RejectionReasons"):
-            output = BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                df1.to_excel(writer, index=False, sheet_name=sheet1_name)
-                df2.to_excel(writer, index=False, sheet_name=sheet2_name)
-            output.seek(0)
-            return output
-
-        # Download buttons
-        current_date = datetime.now().strftime("%Y-%m-%d")
+            with st.expander(title):
+                st.write(df)
         
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            final_report_excel = to_excel(final_report_df, config_data['reasons'], "ProductSets", "RejectionReasons")
-            st.download_button(
-                label="Final Export",
-                data=final_report_excel,
-                file_name=f"Final_Report_{current_date}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+        # Download report as CSV
+        @st.cache_data
+        def convert_df_to_csv(df):
+            return df.to_csv(index=False).encode('utf-8')
 
-        with col2:
-            rejected_excel = to_excel(rejected_df, config_data['reasons'], "ProductSets", "RejectionReasons")
-            st.download_button(
-                label="Rejected Export",
-                data=rejected_excel,
-                file_name=f"Rejected_Products_{current_date}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-        
-        with col3:
-            approved_excel = to_excel(approved_df, config_data['reasons'], "ProductSets", "RejectionReasons")
-            st.download_button(
-                label="Approved Export",
-                data=approved_excel,
-                file_name=f"Approved_Products_{current_date}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+        csv_data = convert_df_to_csv(final_report_df)
+        st.download_button(
+            label="Download Full Report",
+            data=csv_data,
+            file_name="validation_report.csv",
+            mime="text/csv"
+        )
 
     except Exception as e:
-        st.error(f"Error processing the uploaded file: {e}")
+        st.error(f"Error processing file: {e}")
