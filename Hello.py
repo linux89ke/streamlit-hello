@@ -7,7 +7,7 @@ usernames = os.getenv('ST_AUTH_USERNAMES', 'user1,user2').split(',')
 passwords = os.getenv('ST_AUTH_PASSWORDS', 'password1,password2').split(',')
 names = os.getenv('ST_AUTH_NAMES', 'User One,User Two').split(',')
 
-# Proceed with hashing and authentication
+# Hash the passwords
 hashed_passwords = stauth.Hasher(passwords).generate()
 
 # Use Streamlit-Authenticator for authentication
@@ -28,3 +28,4 @@ elif authentication_status is False:
     st.error("Username or password is incorrect.")
 elif authentication_status is None:
     st.warning("Please enter your username and password.")
+
