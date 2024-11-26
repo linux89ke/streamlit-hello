@@ -1,84 +1,140 @@
-# Copyright (c) Streamlit Inc. (2018-2022) Snowflake Inc. (2022)
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-from typing import Any
-
-import numpy as np
-
 import streamlit as st
-from streamlit.hello.utils import show_code
+import pandas as pd
+import requests
+from PIL import Image
+from io import BytesIO
 
+# Streamlit app title
+st.title("Product Details with Images in Two-Column Table")
 
-def animation_demo() -> None:
+# File uploader
+uploaded_file = st.file_uploader("Upload your CSV file", type=["csv"])
 
-    # Interactive Streamlit elements, like these sliders, return their value.
-    # This gives you an extremely simple interaction model.
-    iterations = st.sidebar.slider("Level of detail", 2, 20, 10, 1)
-    separation = st.sidebar.slider("Separation", 0.7, 2.0, 0.7885)
+# Initialize an empty list to store the product details
+product_data = []
 
-    # Non-interactive elements return a placeholder to their location
-    # in the app. Here we're storing progress_bar to update it later.
-    progress_bar = st.sidebar.progress(0)
+if uploaded_file:
+    try:
+        # Read the CSV file with the correct delimiter
+        df = pd.read_csv(uploaded_file, on_bad_lines='skip', encoding='utf-8', sep=";")
 
-    # These two elements will be filled in later, so we create a placeholder
-    # for them using st.empty()
-    frame_text = st.sidebar.empty()
-    image = st.empty()
+        # Strip whitespace from column names
+        df.columns = df.columns.str.strip()
 
-    m, n, s = 960, 640, 400
-    x = np.linspace(-m / s, m / s, num=m).reshape((1, m))
-    y = np.linspace(-n / s, n / s, num=n).reshape((n, 1))
+        # Check if the column 'MAIN_IMAGE' exists
+        if 'MAIN_IMAGE' not in df.columns:
+            st.error("The file does not contain a 'MAIN_IMAGE' column. Please ensure the column is correctly named.")
+        else:
+            # Create a list to store the product details (excluding image for the table)
+            for index, row in df.iterrows():
+                image_url = row['MAIN_IMAGE']
+                try:
+                    # Fetch the image
+                    response = requests.get(image_url, timeout=10)
+                    response.raise_for_status()
+                    img = Image.open(BytesIO(response.content))
 
-    for frame_num, a in enumerate(np.linspace(0.0, 4 * np.pi, 100)):
-        # Here were setting value for these two elements.
-        progress_bar.progress(frame_num)
-        frame_text.text("Frame %i/100" % (frame_num + 1))
+                    # Add product details to the list (excluding image object)
+                    product_data.append({
+                        "SELLER NAME": row.get('SELLER_NAME', 'N/A'),
+                        "NAME": row.get('NAME', 'N/A'),
+                        "COLOR": row.get('COLOR', 'N/A'),
+                        "CATEGORY": row.get('CATEGORY', 'N/A'),
+                        "PRODUCT SET SID": row.get('PRODUCT_SET_SID', 'N/A'),
+                        "PARENTSKU": row.get('PARENTSKU', 'N/A'),
+                        "GLOBAL PRICE": row.get('GLOBAL_PRICE', 'N/A'),
+                        "GLOBAL SALE PRICE": row.get('GLOBAL_SALE_PRICE', 'N/A'),
+                        "Image URL": image_url,  # Keep image URL in the table for reference
+                        "Issue": None  # Placeholder for issue selection
+                    })
 
-        # Performing some fractal wizardry.
-        c = separation * np.exp(1j * a)
-        Z = np.tile(x, (n, 1)) + 1j * np.tile(y, (1, m))
-        C = np.full((n, m), c)
-        M: Any = np.full((n, m), True, dtype=bool)
-        N = np.zeros((n, m))
+                    # Display images and product details in a two-column layout
+                    col1, col2 = st.columns([1, 3])  # Adjust the size ratio as needed
+                    with col1:
+                        # Add hover effect CSS for enlarging image on hover
+                        st.markdown(
+                            f"""
+                            <style>
+                            .img-hover-container {{
+                                position: relative;
+                                display: inline-block;
+                            }}
+                            .img-hover-container img {{
+                                width: 100%;
+                                height: auto;
+                                border-radius: 10px;
+                            }}
+                            .img-hover-container:hover img {{
+                                transform: scale(1.5);  /* Make the image bigger on hover */
+                                transition: transform 0.3s ease;
+                            }}
+                            </style>
+                            <div class="img-hover-container">
+                                <img src="{image_url}" alt="Image for {row.get('NAME', 'N/A')}" />
+                            </div>
+                            """,
+                            unsafe_allow_html=True
+                        )
+                    with col2:
+                        st.write(f"**SELLER NAME**: {row.get('SELLER_NAME', 'N/A')}")
+                        st.write(f"**NAME**: {row.get('NAME', 'N/A')}")
+                        st.write(f"**COLOR**: {row.get('COLOR', 'N/A')}")
+                        st.write(f"**CATEGORY**: {row.get('CATEGORY', 'N/A')}")
+                        st.write(f"**PRODUCT SET SID**: {row.get('PRODUCT_SET_SID', 'N/A')}")
+                        st.write(f"**PARENTSKU**: {row.get('PARENTSKU', 'N/A')}")
+                        st.write(f"**GLOBAL PRICE**: {row.get('GLOBAL_PRICE', 'N/A')}")
+                        st.write(f"**GLOBAL SALE PRICE**: {row.get('GLOBAL_SALE_PRICE', 'N/A')}")
 
-        for i in range(iterations):
-            Z[M] = Z[M] * Z[M] + C[M]
-            M[np.abs(Z) > 2] = False
-            N[M] = i
+                    # Add radio buttons to select the issue (only one option can be selected)
+                    issue = st.radio(
+                        f"Select issue for {row.get('NAME', 'N/A')}",
+                        options=["", "Image looks stretched", "Image Is Blurry", "Poor Image Quality/Editing", "Wrong category"],
+                        key=f"issue_{index}"
+                    )
+                    product_data[-1]["Issue"] = issue  # Store the selected issue
 
-        # Update the image placeholder by calling the image() function on it.
-        image.image(1.0 - (N / N.max()), use_column_width=True)
+                except Exception as e:
+                    # Handle errors in image fetching and add a placeholder for missing images
+                    product_data.append({
+                        "SELLER NAME": row.get('SELLER_NAME', 'N/A'),
+                        "NAME": row.get('NAME', 'N/A'),
+                        "COLOR": row.get('COLOR', 'N/A'),
+                        "CATEGORY": row.get('CATEGORY', 'N/A'),
+                        "PRODUCT SET SID": row.get('PRODUCT_SET_SID', 'N/A'),
+                        "PARENTSKU": row.get('PARENTSKU', 'N/A'),
+                        "GLOBAL PRICE": row.get('GLOBAL_PRICE', 'N/A'),
+                        "GLOBAL SALE PRICE": row.get('GLOBAL_SALE_PRICE', 'N/A'),
+                        "Image URL": f"Error loading image: {e}",
+                        "Issue": None
+                    })
 
-    # We clear elements by calling empty on them.
-    progress_bar.empty()
-    frame_text.empty()
+                # Add a separator between products
+                st.markdown("---")
 
-    # Streamlit widgets automatically run the script from top to bottom. Since
-    # this button is not connected to any other logic, it just causes a plain
-    # rerun.
-    st.button("Re-run")
+            # Add a button to export selected products
+            if st.button("Export Products with Issues"):
+                # Filter products with an issue selected
+                products_with_issues = [product for product in product_data if product["Issue"]]
 
+                if products_with_issues:
+                    # Create a DataFrame from the products with issues
+                    issue_df = pd.DataFrame(products_with_issues)
 
-st.set_page_config(page_title="Animation Demo", page_icon="📹")
-st.markdown("# Animation Demo")
-st.sidebar.header("Animation Demo")
-st.write(
-    """This app shows how you can use Streamlit to build cool animations.
-It displays an animated fractal based on the the Julia Set. Use the slider
-to tune different parameters."""
-)
+                    # Save the DataFrame as an Excel file
+                    output_file = "/mnt/data/products_with_issues.xlsx"
+                    issue_df.to_excel(output_file, index=False)
 
-animation_demo()
+                    # Provide a download link for the user
+                    st.download_button(
+                        label="Download Excel with Products and Issues",
+                        data=open(output_file, "rb").read(),
+                        file_name="products_with_issues.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                else:
+                    st.warning("No products have been marked with an issue. Please select at least one issue.")
 
-show_code(animation_demo)
+    except Exception as e:
+        st.error(f"An error occurred: {e}")
+else:
+    st.info("Please upload a CSV file to proceed.")
