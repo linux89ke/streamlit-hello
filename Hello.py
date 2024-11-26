@@ -6,7 +6,7 @@ import pandas as pd
 from io import BytesIO
 from datetime import datetime
 
-# Load environment variables from .env file if running locally
+# Load environment variables from .env file
 load_dotenv()
 
 # Streamlit Authentication
@@ -18,7 +18,7 @@ try:
     usernames = os.getenv('ST_AUTH_USERNAMES', 'user1,user2').split(',')
     passwords = os.getenv('ST_AUTH_PASSWORDS', 'password1,password2').split(',')
     names = os.getenv('ST_AUTH_NAMES', 'User One,User Two').split(',')
-    
+
     # Debugging: Check environment variables
     st.write("Usernames:", usernames)
     st.write("Passwords:", passwords)
@@ -29,8 +29,9 @@ try:
         st.error("No passwords found in environment variables. Please set them properly.")
         st.stop()
 
-    # Hash the passwords using streamlit-authenticator's HashedPassword class
-    hashed_passwords = stauth.HashedPassword(passwords).hashed_passwords
+    # Hash the passwords using streamlit-authenticator's Hasher class
+    # The Hasher expects a list of passwords
+    hashed_passwords = stauth.Hasher(passwords).generate()
 
     # Authenticate users
     authenticator = stauth.Authenticate(
@@ -41,7 +42,7 @@ try:
         key="my_secret_key",
         cookie_expiry_days=30,
     )
-    
+
     # Check if the user is authenticated
     name, authentication_status = authenticator.login("Login", "main")
 
@@ -120,4 +121,3 @@ if authentication_status:
 
         except Exception as e:
             st.error(f"Error processing file: {e}")
-
