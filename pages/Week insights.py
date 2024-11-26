@@ -11,7 +11,8 @@ uploaded_file = st.file_uploader("Choose the Weekly Review Excel file", type=["x
 if uploaded_file:
     # Load the Excel file
     try:
-        data = pd.read_excel(uploaded_file, sheet_name=None)  # Load all sheets as a dictionary
+        # Load all sheets from the Excel file
+        data = pd.read_excel(uploaded_file, sheet_name=None)  # Dictionary of sheets
         st.success("File uploaded successfully!")
         
         # Display sheet selection
@@ -23,6 +24,9 @@ if uploaded_file:
         st.write(f"Preview of the `{selected_sheet}` sheet:")
         st.dataframe(df.head())  # Display first few rows
         
+        # Convert column names to strings to handle mixed types
+        df.columns = df.columns.map(str)
+        
         # Dynamic Week Analysis
         st.subheader("Dynamic Week Analysis")
         
@@ -31,9 +35,12 @@ if uploaded_file:
         st.write("Identified Week Columns:", week_columns)
         
         if week_columns:
+            # Ensure week columns contain numerical data
+            week_data = df[week_columns].apply(pd.to_numeric, errors='coerce')
+            
             # Example Calculation: Weekly Totals
             st.write("Performing Example Calculation...")
-            weekly_totals = df[week_columns].sum()
+            weekly_totals = week_data.sum()
             st.bar_chart(weekly_totals)
             
             # Display Calculations
@@ -55,4 +62,3 @@ if uploaded_file:
 
 # Footer
 st.write("Developed with ❤️ using Streamlit.")
-
