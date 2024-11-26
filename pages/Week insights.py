@@ -83,8 +83,9 @@ if uploaded_file:
         rejection_reasons_column_start = 20  # Adjust based on the actual structure of your file (can be dynamic)
         top_rejected_sellers_column_start = 25  # Adjust based on the actual structure of your file (can be dynamic)
         
-        # Check if the columns exist
+        # Check the number of columns in the uploaded file
         num_columns = raw_data.shape[1]
+        st.write(f"Total number of columns in the data: {num_columns}")
 
         if num_columns > rejection_categories_column_start:
             rejection_categories_kenya = {}
@@ -94,9 +95,8 @@ if uploaded_file:
             rejected_sellers_kenya = {}
             rejected_sellers_uganda = {}
 
-            # Extract data for rejection categories
+            # Extract data for rejection categories if the column range exists
             for i, week in enumerate(week_columns):
-                # Ensure there are enough columns in the file to extract the required categories
                 if num_columns > rejection_categories_column_start + i:
                     rejection_categories_kenya[week] = raw_data.iloc[rejection_categories_column_start + i, 1:6].dropna().values.tolist()
                     rejection_categories_uganda[week] = raw_data.iloc[rejection_categories_column_start + i, 6:11].dropna().values.tolist()
