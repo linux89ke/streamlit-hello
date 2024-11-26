@@ -21,3 +21,4 @@ fuzzywuzzy
 matplotlib
 plotly
 streamlit-aggrid
+streamlit-authenticator
