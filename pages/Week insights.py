@@ -1,113 +1,87 @@
 import streamlit as st
 import pandas as pd
 
-
-# Function to load and parse the data
-def load_and_parse_data(uploaded_file):
-    # Load file based on type
-    if uploaded_file.name.endswith('.csv') or uploaded_file.name.endswith('.txt'):
-        df = pd.read_csv(uploaded_file, sep="\t")
-    elif uploaded_file.name.endswith('.xls') or uploaded_file.name.endswith('.xlsx'):
-        df = pd.read_excel(uploaded_file)
-    else:
-        st.error("Unsupported file format! Please upload .xls, .xlsx, .csv, or .txt files.")
+# Function to parse the pasted data (tab-separated format)
+def parse_pasted_data(raw_data):
+    try:
+        # Read the pasted data as a CSV-like structure
+        data = pd.read_csv(StringIO(raw_data), sep="\t")
+        return data
+    except Exception as e:
+        st.error(f"Error parsing data: {e}")
         return None
-
-    # Display dataset columns for debugging
-    st.write("Columns in the dataset:", df.columns.tolist())
-
-    # Detect week-related columns dynamically
-    week_columns = [col for col in df.columns if "Week" in col]
-
-    if not week_columns:
-        st.error("No columns found for weeks (e.g., 'Week 46 KE'). Please check the dataset format.")
-        return None
-
-    # Handle datasets without "Section" or "Metric" columns
-    if "Section" in df.columns and "Metric" in df.columns:
-        id_vars = ["Section", "Metric"]
-    else:
-        id_vars = []  # No id_vars if the dataset lacks these columns
-
-    # Reshape data into a long format
-    reshaped_df = df.melt(
-        id_vars=id_vars,
-        value_vars=week_columns,
-        var_name="Week_Country",
-        value_name="Value"
-    )
-
-    # Extract week and country from 'Week_Country'
-    reshaped_df[['Week', 'Country']] = reshaped_df['Week_Country'].str.extract(r'(Week \d+)\s+(KE|UG)')
-    reshaped_df.drop(columns=["Week_Country"], inplace=True)
-
-    # Display reshaped data for debugging
-    st.write("Reshaped Dataset:", reshaped_df.head())
-
-    return reshaped_df
-
 
 # Streamlit App
-st.title("Dynamic Weekly Product Rejection Insights")
+st.title("Weekly Product Rejection Insights (Current and Previous Week)")
 
-# File upload
-uploaded_file = st.file_uploader("Upload your data file (.xls, .xlsx, .csv, or .txt)", type=['xls', 'xlsx', 'csv', 'txt'])
+# User inputs for the country selection
+selected_country = st.selectbox("Select Country", ["KE", "UG"])
 
-if uploaded_file:
-    # Load and parse the data
-    data = load_and_parse_data(uploaded_file)
+# Instructions for the user to paste the data for both weeks (current and previous)
+st.subheader("Paste Data for the Current Week and Previous Week")
+st.write("Please copy and paste the data from Excel into the text areas below. Ensure data is tab-separated.")
 
-    if data is not None:
-        # Display the reshaped dataset
-        st.subheader("Parsed Dataset")
-        st.dataframe(data)
+# Text areas for current week and previous week data
+current_week_data = st.text_area(
+    "Paste Current Week Data",
+    height=200,
+    placeholder="Paste data for current week here (tab-separated)"
+)
 
-        # Extract unique weeks, sections, and metrics
-        unique_weeks = data["Week"].dropna().unique()
-        unique_countries = data["Country"].dropna().unique()
-        unique_metrics = data["Metric"].dropna().unique() if "Metric" in data.columns else None
-        unique_sections = data["Section"].dropna().unique() if "Section" in data.columns else None
+previous_week_data = st.text_area(
+    "Paste Previous Week Data",
+    height=200,
+    placeholder="Paste data for previous week here (tab-separated)"
+)
 
-        # Debugging step: Display the unique weeks, countries, metrics, and sections
-        st.write(f"Unique Weeks: {unique_weeks}")
-        st.write(f"Unique Countries: {unique_countries}")
-        st.write(f"Unique Metrics: {unique_metrics}")
-        st.write(f"Unique Sections: {unique_sections}")
+# If both current and previous week data are provided, process the data
+if current_week_data.strip() and previous_week_data.strip():
+    # Parse both weeks' data
+    current_week_df = parse_pasted_data(current_week_data)
+    previous_week_df = parse_pasted_data(previous_week_data)
 
-        # User inputs for dynamic selection
-        selected_week = st.selectbox("Select Week", unique_weeks)
-        selected_country = st.selectbox("Select Country", unique_countries)
+    # Check if both datasets are successfully parsed
+    if current_week_df is not None and previous_week_df is not None:
+        # Add a 'Week' column to each dataframe
+        current_week_df['Week'] = 'Current Week'
+        previous_week_df['Week'] = 'Previous Week'
 
-        if unique_sections is not None:
-            selected_section = st.selectbox("Select Section", unique_sections)
-        else:
-            selected_section = None
+        # Combine the two dataframes (stack them)
+        combined_df = pd.concat([current_week_df, previous_week_df], ignore_index=True)
 
-        if unique_metrics is not None:
-            selected_metric = st.selectbox("Select Metric", unique_metrics)
-        else:
-            selected_metric = None
+        # Filter by the selected country
+        country_data = combined_df[combined_df["Country"] == selected_country]
 
-        # Filter data based on user selections
-        filtered_data = data[
-            (data["Week"] == selected_week) &
-            (data["Country"] == selected_country)
-        ]
-        if selected_section:
-            filtered_data = filtered_data[filtered_data["Section"] == selected_section]
-        if selected_metric:
-            filtered_data = filtered_data[filtered_data["Metric"] == selected_metric]
+        # Display the combined data
+        st.subheader(f"Data for {selected_country} (Current Week and Previous Week)")
+        st.dataframe(country_data)
 
-        # Display insights
-        st.subheader(f"Insights for {selected_week} - {selected_country}")
-        if not filtered_data.empty:
-            total_value = filtered_data["Value"].sum()
-            st.write(f"**Total Value:** {total_value}")
-        else:
-            st.write("No data available for the selected filters.")
+        # Insights for each metric (e.g., Approved, Rejected, Total)
+        st.subheader("Insights")
+        metrics = country_data["Metric"].unique()
 
-        # Visualization
-        st.subheader("Visualization")
-        if not filtered_data.empty:
-            chart_data = filtered_data.pivot(index="Country", columns="Metric", values="Value").reset_index()
-            st.bar_chart(chart_data.set_index("Country"))
+        for metric in metrics:
+            metric_data = country_data[country_data["Metric"] == metric]
+            if len(metric_data) == 2:  # Ensure there are data points for both weeks
+                current_value = metric_data[metric_data["Week"] == "Current Week"]["Value"].values[0]
+                previous_value = metric_data[metric_data["Week"] == "Previous Week"]["Value"].values[0]
+
+                change = current_value - previous_value
+                change_percentage = (change / previous_value) * 100 if previous_value != 0 else 0
+
+                st.write(f"**{metric}**:")
+                st.write(f"Current Week: {current_value}")
+                st.write(f"Previous Week: {previous_value}")
+                st.write(f"Change: {change} ({change_percentage:.2f}%)")
+                st.write("---")
+            else:
+                st.write(f"**{metric}**: Missing data for one of the weeks.")
+                st.write("---")
+
+        # Visualization: Comparison of metrics between weeks
+        st.subheader("Visualization: Current vs Previous Week")
+        if not country_data.empty:
+            chart_data = country_data.pivot(index="Metric", columns="Week", values="Value").reset_index()
+            st.bar_chart(chart_data.set_index("Metric"))
+    else:
+        st.error("Error parsing data for current or previous week.")
