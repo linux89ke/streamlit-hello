@@ -2,113 +2,77 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# Function to load and parse the data
+# Function to load data
 def load_data(uploaded_file):
     if uploaded_file.name.endswith('.csv'):
         return pd.read_csv(uploaded_file)
     else:
         return pd.read_excel(uploaded_file)
 
-# Function to calculate insights
-def generate_insights(data):
-    # Calculate totals and rejection percentages
-    total_approved_ke = data['Approved'].iloc[0]
-    total_rejected_ke = data['Rejected'].iloc[0]
-    total_entries_ke = total_approved_ke + total_rejected_ke
-    approval_rate_ke = (total_approved_ke / total_entries_ke) * 100
-    rejection_rate_ke = (total_rejected_ke / total_entries_ke) * 100
+# Extract week-related columns dynamically
+def extract_weeks(columns):
+    return [col for col in columns if "Week" in col]
 
-    total_approved_ug = data['Approved'].iloc[1]
-    total_rejected_ug = data['Rejected'].iloc[1]
-    total_entries_ug = total_approved_ug + total_rejected_ug
-    approval_rate_ug = (total_approved_ug / total_entries_ug) * 100
-    rejection_rate_ug = (total_rejected_ug / total_entries_ug) * 100
-
-    # Rejections due to color
-    color_rejections_ke = data['Rejection Reasons'].str.contains('color', case=False).sum()
-    color_rejection_rate_ke = (color_rejections_ke / total_rejected_ke) * 100 if total_rejected_ke > 0 else 0
-
-    color_rejections_ug = data['Rejection Reasons'].str.contains('color', case=False).sum()
-    color_rejection_rate_ug = (color_rejections_ug / total_rejected_ug) * 100 if total_rejected_ug > 0 else 0
-
-    # Rejection Reasons Breakdown
-    rejection_reasons_ke = data['Rejection Reasons'].value_counts()
-    rejection_reasons_ug = data['Rejection Reasons'].value_counts()
-
-    # Top rejected categories
-    top_categories_ke = data.groupby('Category')['Rejected'].sum().sort_values(ascending=False).head(5)
-    top_categories_ug = data.groupby('Category')['Rejected'].sum().sort_values(ascending=False).head(5)
-
-    return (approval_rate_ke, rejection_rate_ke, color_rejection_rate_ke,
-            approval_rate_ug, rejection_rate_ug, color_rejection_rate_ug,
-            rejection_reasons_ke, rejection_reasons_ug, top_categories_ke, top_categories_ug)
+# Function to generate insights for a specific week
+def calculate_week_insights(data, week_prefix, country):
+    approved_col = f"{week_prefix} {country} Approved"
+    rejected_col = f"{week_prefix} {country} Rejected"
+    if approved_col in data.columns and rejected_col in data.columns:
+        approved = data[approved_col].iloc[0]
+        rejected = data[rejected_col].iloc[0]
+        total = approved + rejected
+        approval_rate = (approved / total) * 100 if total > 0 else 0
+        rejection_rate = (rejected / total) * 100 if total > 0 else 0
+        return approved, rejected, total, approval_rate, rejection_rate
+    else:
+        return 0, 0, 0, 0, 0
 
 # Streamlit UI
-st.title("Weekly Product Rejection Insights")
+st.title("Dynamic Weekly Product Rejection Insights")
 
 # File upload
 uploaded_file = st.file_uploader("Upload your weekly data file", type=['csv', 'xlsx'])
 
 if uploaded_file:
-    # Load the data
+    # Load data
     data = load_data(uploaded_file)
-
-    st.dataframe(data)  # Display the uploaded data
-
-    # Generate insights
-    (approval_rate_ke, rejection_rate_ke, color_rejection_rate_ke,
-     approval_rate_ug, rejection_rate_ug, color_rejection_rate_ug,
-     rejection_reasons_ke, rejection_reasons_ug,
-     top_categories_ke, top_categories_ug) = generate_insights(data)
-
-    # Display summary statistics for both Kenya and Uganda
-    st.subheader("Summary Statistics")
-    st.write(f"**Kenya - Approval Rate:** {approval_rate_ke:.2f}%")
-    st.write(f"**Kenya - Rejection Rate:** {rejection_rate_ke:.2f}%")
-    st.write(f"**Kenya - Rejections due to Missing/Incorrect Color:** {color_rejection_rate_ke:.2f}%")
-
-    st.write(f"**Uganda - Approval Rate:** {approval_rate_ug:.2f}%")
-    st.write(f"**Uganda - Rejection Rate:** {rejection_rate_ug:.2f}%")
-    st.write(f"**Uganda - Rejections due to Missing/Incorrect Color:** {color_rejection_rate_ug:.2f}%")
-
-    # Rejection Reasons Breakdown - Bar chart using matplotlib
-    st.subheader("Rejection Reasons Breakdown (Kenya)")
-    rejection_reasons_chart_ke = rejection_reasons_ke.plot(kind='bar', title='Rejection Reasons (Kenya)', figsize=(10, 6), color='skyblue')
+    st.dataframe(data)  # Display data
+    
+    # Extract week-related columns
+    week_columns = extract_weeks(data.columns)
+    weeks = sorted(set(col.split()[0] for col in week_columns))  # Extract unique week numbers
+    
+    # Dynamic week selection
+    st.subheader("Select Weeks and Countries")
+    selected_week = st.selectbox("Choose a Week", weeks)
+    countries = ["KE", "UG"]
+    selected_country = st.radio("Choose a Country", countries)
+    
+    # Calculate insights for the selected week and country
+    approved, rejected, total, approval_rate, rejection_rate = calculate_week_insights(data, selected_week, selected_country)
+    
+    # Display insights
+    st.subheader(f"Insights for {selected_week} - {selected_country}")
+    st.write(f"**Approved:** {approved}")
+    st.write(f"**Rejected:** {rejected}")
+    st.write(f"**Total Work Done:** {total}")
+    st.write(f"**Approval Rate:** {approval_rate:.2f}%")
+    st.write(f"**Rejection Rate:** {rejection_rate:.2f}%")
+    
+    # Visualizations for rejection reasons
+    st.subheader("Rejection Reasons Breakdown")
+    rejection_reasons = data['Rejection Reasons'].value_counts()
+    rejection_reasons_chart = rejection_reasons.plot(kind='bar', title='Rejection Reasons', figsize=(10, 6), color='skyblue')
     plt.xlabel('Rejection Reason')
     plt.ylabel('Count')
-    st.pyplot(rejection_reasons_chart_ke.figure)
-
-    st.subheader("Rejection Reasons Breakdown (Uganda)")
-    rejection_reasons_chart_ug = rejection_reasons_ug.plot(kind='bar', title='Rejection Reasons (Uganda)', figsize=(10, 6), color='lightcoral')
-    plt.xlabel('Rejection Reason')
-    plt.ylabel('Count')
-    st.pyplot(rejection_reasons_chart_ug.figure)
-
-    # Top rejected categories - Bar chart using matplotlib
-    st.subheader("Top Rejected Categories (Kenya)")
-    top_categories_chart_ke = top_categories_ke.plot(kind='bar', title='Top Rejected Categories (Kenya)', figsize=(10, 6), color='lightgreen')
-    plt.xlabel('Category')
-    plt.ylabel('Rejected Products')
-    st.pyplot(top_categories_chart_ke.figure)
-
-    st.subheader("Top Rejected Categories (Uganda)")
-    top_categories_chart_ug = top_categories_ug.plot(kind='bar', title='Top Rejected Categories (Uganda)', figsize=(10, 6), color='orange')
-    plt.xlabel('Category')
-    plt.ylabel('Rejected Products')
-    st.pyplot(top_categories_chart_ug.figure)
-
-    # Generate downloadable report
+    st.pyplot(rejection_reasons_chart.figure)
+    
+    # Report generation (optional)
     st.subheader("Download Insights Report")
-    def generate_report(data, rejection_reasons_ke, rejection_reasons_ug, top_categories_ke, top_categories_ug):
-        with pd.ExcelWriter('Insights_Report.xlsx', engine='xlsxwriter') as writer:
-            data.to_excel(writer, sheet_name='Data', index=False)
-            rejection_reasons_ke.to_excel(writer, sheet_name='Rejection Reasons (Kenya)', index=True)
-            rejection_reasons_ug.to_excel(writer, sheet_name='Rejection Reasons (Uganda)', index=True)
-            top_categories_ke.to_excel(writer, sheet_name='Top Categories (Kenya)', index=True)
-            top_categories_ug.to_excel(writer, sheet_name='Top Categories (Uganda)', index=True)
-        return 'Insights_Report.xlsx'
-
     if st.button("Generate Report"):
-        report_path = generate_report(data, rejection_reasons_ke, rejection_reasons_ug, top_categories_ke, top_categories_ug)
-        st.success(f"Report generated: {report_path}")
-        st.download_button("Download Report", report_path, file_name="Insights_Report.xlsx")
+        report_path = "Dynamic_Insights_Report.xlsx"
+        with pd.ExcelWriter(report_path, engine='xlsxwriter') as writer:
+            data.to_excel(writer, sheet_name='Data', index=False)
+        st.success("Report generated successfully!")
+        st.download_button("Download Report", report_path, file_name="Dynamic_Insights_Report.xlsx")
+
