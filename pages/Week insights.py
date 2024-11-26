@@ -3,7 +3,7 @@ import pandas as pd
 
 # Title
 st.title("QC Regional Weekly Review Insights")
-st.write("Upload the Weekly Review file to analyze data for Kenya and Uganda, including rejection categories, rejection reasons, and top rejected sellers.")
+st.write("Upload the Excel file to analyze data for Kenya and Uganda, along with rejection categories, reasons, and top rejected sellers.")
 
 # File Upload
 uploaded_file = st.file_uploader("Choose the Weekly Review Excel file", type=["xls", "xlsx"])
@@ -12,18 +12,22 @@ if uploaded_file:
     try:
         # Load the file
         raw_data = pd.read_excel(uploaded_file, sheet_name="Sheet3", header=None)
-        
-        # Get dynamic weeks (from the first row of the file)
-        week_columns = raw_data.iloc[0, 1:].values  # Week numbers
-        countries = ["KE", "UG"]
+
+        # Display the first few rows to inspect the data
+        st.subheader("Inspecting Uploaded Data")
+        st.write(raw_data.head(10))  # Display the first 10 rows to understand the structure
+
+        # Get the dynamic weeks from the first row (assuming week data starts at column 1)
+        week_columns = raw_data.iloc[0, 1:].values  # Get the week numbers
+        countries = ["KE", "UG"]  # Kenya and Uganda
         platforms = ["SellerCentre", "PIM"]
         
-        # Extract platform and work data for SellerCentre, PIM, and total work
+        # Extract data for SellerCentre, PIM, and total work
         sellercentre_data = raw_data.iloc[2:5, 1:].values
         pim_data = raw_data.iloc[6:9, 1:].values
         total_data = raw_data.iloc[11:14, 1:].values
 
-        # Build main dataframes
+        # Build dataframes for SellerCentre, PIM, and Total Work data
         metrics = ["Approved", "Rejected", "Total"]
         dfs = []
 
@@ -40,8 +44,8 @@ if uploaded_file:
                         })
         
         main_df = pd.DataFrame(dfs)
-
-        # Ensure values are numeric
+        
+        # Ensure numeric values
         main_df["Value"] = pd.to_numeric(main_df["Value"], errors="coerce")
         
         # Display the restructured data
@@ -50,7 +54,7 @@ if uploaded_file:
 
         # Insights by Platform and Country
         st.subheader("Platform and Country Insights")
-
+        
         for platform in main_df["Platform"].unique():
             st.write(f"**{platform} Analysis**")
             platform_data = main_df[main_df["Platform"] == platform]
@@ -71,53 +75,66 @@ if uploaded_file:
         trend_data = main_df.groupby(["Week", "Metric", "Platform"])["Value"].sum().unstack()
         st.line_chart(trend_data)
 
-        # Dynamic Rejection Categories (Week-by-Week Data)
-        st.subheader("Top Rejection Categories (Week-by-Week)")
-        rejection_categories = {}
+        # Extract rejection categories and reasons dynamically
+        st.subheader("Dynamic Rejection Categories and Reasons")
+
+        # Dynamically calculate column ranges for rejection categories, reasons, and sellers based on the structure of the file
+        rejection_categories_column_start = 15  # Adjust based on the actual structure of your file (can be dynamic)
+        rejection_reasons_column_start = 20  # Adjust based on the actual structure of your file (can be dynamic)
+        top_rejected_sellers_column_start = 25  # Adjust based on the actual structure of your file (can be dynamic)
         
-        # Rejection categories are based on data from another part of the file, assume we extract them from rows 15-18 (example)
-        for week in week_columns:
-            rejection_categories[week] = {
-                "Kenya": raw_data.iloc[15:20, 1].values.tolist(),  # Adjust to actual row positions in your file
-                "Uganda": raw_data.iloc[15:20, 2].values.tolist()  # Adjust to actual row positions in your file
-            }
+        # Check if the columns exist
+        num_columns = raw_data.shape[1]
 
-        for week, data in rejection_categories.items():
-            st.write(f"**Week {week}**")
-            for country, categories in data.items():
-                st.write(f"**{country}**: {', '.join(categories)}")
-        
-        # Dynamic Rejection Reasons (Week-by-Week Data)
-        st.subheader("Top Rejection Reasons (Week-by-Week)")
-        rejection_reasons = {}
+        if num_columns > rejection_categories_column_start:
+            rejection_categories_kenya = {}
+            rejection_categories_uganda = {}
+            rejection_reasons_kenya = {}
+            rejection_reasons_uganda = {}
+            rejected_sellers_kenya = {}
+            rejected_sellers_uganda = {}
 
-        # Rejection reasons can be in another part of the sheet, adjust row positions
-        for week in week_columns:
-            rejection_reasons[week] = {
-                "Kenya": raw_data.iloc[20:25, 1].values.tolist(),  # Adjust row index as needed
-                "Uganda": raw_data.iloc[20:25, 2].values.tolist()  # Adjust row index as needed
-            }
+            # Extract data for rejection categories
+            for i, week in enumerate(week_columns):
+                # Ensure there are enough columns in the file to extract the required categories
+                if num_columns > rejection_categories_column_start + i:
+                    rejection_categories_kenya[week] = raw_data.iloc[rejection_categories_column_start + i, 1:6].dropna().values.tolist()
+                    rejection_categories_uganda[week] = raw_data.iloc[rejection_categories_column_start + i, 6:11].dropna().values.tolist()
+            
+            # Display rejection categories for each week and country
+            st.write("### Rejection Categories")
+            for week in week_columns:
+                st.write(f"**Week {week}**")
+                st.write(f"**Kenya**: {', '.join(rejection_categories_kenya.get(week, []))}")
+                st.write(f"**Uganda**: {', '.join(rejection_categories_uganda.get(week, []))}")
 
-        for week, data in rejection_reasons.items():
-            st.write(f"**Week {week}**")
-            for country, reasons in data.items():
-                st.write(f"**{country}**: {', '.join(reasons)}")
-        
-        # Dynamic Top Rejected Sellers (Week-by-Week Data)
-        st.subheader("Top Rejected Sellers (Week-by-Week)")
-        rejected_sellers = {}
+            # Extract data for rejection reasons
+            for i, week in enumerate(week_columns):
+                if num_columns > rejection_reasons_column_start + i:
+                    rejection_reasons_kenya[week] = raw_data.iloc[rejection_reasons_column_start + i, 1:6].dropna().values.tolist()
+                    rejection_reasons_uganda[week] = raw_data.iloc[rejection_reasons_column_start + i, 6:11].dropna().values.tolist()
 
-        # Sellers info will come from another part of the sheet
-        for week in week_columns:
-            rejected_sellers[week] = {
-                "Kenya": raw_data.iloc[25:30, 1].values.tolist(),  # Adjust row index as needed
-                "Uganda": raw_data.iloc[25:30, 2].values.tolist()  # Adjust row index as needed
-            }
+            # Display rejection reasons for each week and country
+            st.write("### Rejection Reasons")
+            for week in week_columns:
+                st.write(f"**Week {week}**")
+                st.write(f"**Kenya**: {', '.join(rejection_reasons_kenya.get(week, []))}")
+                st.write(f"**Uganda**: {', '.join(rejection_reasons_uganda.get(week, []))}")
+            
+            # Extract data for top rejected sellers
+            for i, week in enumerate(week_columns):
+                if num_columns > top_rejected_sellers_column_start + i:
+                    rejected_sellers_kenya[week] = raw_data.iloc[top_rejected_sellers_column_start + i, 1:6].dropna().values.tolist()
+                    rejected_sellers_uganda[week] = raw_data.iloc[top_rejected_sellers_column_start + i, 6:11].dropna().values.tolist()
 
-        for week, data in rejected_sellers.items():
-            st.write(f"**Week {week}**")
-            for country, sellers in data.items():
-                st.write(f"**{country}**: {', '.join(sellers)}")
-                
+            # Display rejected sellers for each week and country
+            st.write("### Top Rejected Sellers")
+            for week in week_columns:
+                st.write(f"**Week {week}**")
+                st.write(f"**Kenya**: {', '.join(rejected_sellers_kenya.get(week, []))}")
+                st.write(f"**Uganda**: {', '.join(rejected_sellers_uganda.get(week, []))}")
+        else:
+            st.warning("The expected columns for rejection categories, reasons, or sellers do not exist in this file.")
+
     except Exception as e:
         st.error(f"An error occurred: {e}")
