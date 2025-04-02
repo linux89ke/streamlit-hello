@@ -6,6 +6,18 @@ import math
 import zipfile
 import datetime
 
+# Default country distribution percentages
+default_distribution = {
+    "Nigeria": (43.00, "NG"),
+    "Kenya": (23.00, "KE"),
+    "Uganda": (11.80, "UG"),
+    "Ghana": (12.00, "GH"),
+    "Egypt": (0.00, "EG"),
+    "Morocco": (0.00, "MA"),
+    "Ivory Coast": (6.00, "IC"),
+    "Senegal": (5.00, "SN"),
+}
+
 def generate_filename(base_name, extension="xlsx"):
     date_str = datetime.datetime.today().strftime("%d-%m-%Y")
     return f"{base_name} {date_str}.{extension}"
