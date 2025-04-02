@@ -67,7 +67,7 @@ def repair_csv(file, delimiter):
             if len(row) == expected_columns:
                 cleaned_data.append(row)
             elif len(row) > expected_columns:
-                row = row[:expected_columns - 1] + [",".join(row[expected_columns - 1:])]
+                row = row[:expected_columns - 1] + [" ".join(row[expected_columns - 1:])]
                 cleaned_data.append(row)
             elif len(row) < expected_columns:
                 row.extend([""] * (expected_columns - len(row)))
@@ -144,8 +144,11 @@ if uploaded_files:
             merged_df.to_excel(writer, sheet_name="Merged Data", index=False)
         output_excel.seek(0)
 
-        st.write("### Merged Data Preview:")
-        st.dataframe(merged_df.head())
+        st.write("### File Statistics")
+        st.table(file_stats)
+
+        st.write("### Country Distribution")
+        st.table(country_counts)
 
         st.download_button(
             label="📥 Download Merged Excel",
