@@ -3,6 +3,8 @@ import pandas as pd
 import csv
 import io
 import math
+import zipfile
+import datetime
 
 # Default country distribution percentages
 default_distribution = {
@@ -16,14 +18,36 @@ default_distribution = {
     "Senegal": (5.00, "SN"),
 }
 
+def generate_filename(base_name, extension="xlsx"):
+    date_str = datetime.datetime.today().strftime("%d-%m-%Y")
+    return f"{base_name} {date_str}.{extension}"
+
+def save_individual_country_files(df, country_counts):
+    date_str = datetime.datetime.today().strftime("%d-%m-%Y")
+    folder_name = f"PIM QC ALL COUNTRIES {date_str}/"
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        for country in country_counts[:-1]:  # Skip total row
+            country_code = country["Country Code"]
+            country_name = country["Country"]
+            if not country_code:
+                continue
+            country_df = df[df["Countries"] == country_code]
+            country_file_name = f"{folder_name}PIM QC ALL COUNTRIES {country_code}.xlsx"
+            file_buffer = io.BytesIO()
+            with pd.ExcelWriter(file_buffer, engine="xlsxwriter") as writer:
+                country_df.to_excel(writer, sheet_name="Data", index=False)
+            file_buffer.seek(0)
+            zip_file.writestr(country_file_name, file_buffer.read())
+    zip_buffer.seek(0)
+    return zip_buffer
+
 def detect_delimiter(file):
-    """Detects delimiter by reading a sample of the file."""
     sample = file.read(2048)
     file.seek(0)
     return ';' if b';' in sample else ','
 
 def repair_csv(file, delimiter):
-    """Reads and repairs CSV structure issues."""
     cleaned_data = []
     header = None
     expected_columns = None
@@ -43,7 +67,7 @@ def repair_csv(file, delimiter):
             if len(row) == expected_columns:
                 cleaned_data.append(row)
             elif len(row) > expected_columns:
-                row = row[:expected_columns - 1] + [",".join(row[expected_columns - 1:])]
+                row = row[:expected_columns - 1] + [" ".join(row[expected_columns - 1:])]
                 cleaned_data.append(row)
             elif len(row) < expected_columns:
                 row.extend([""] * (expected_columns - len(row)))
@@ -52,30 +76,19 @@ def repair_csv(file, delimiter):
     return pd.DataFrame(cleaned_data[1:], columns=cleaned_data[0]), row_count
 
 def distribute_countries(df, selected_countries):
-    """Assigns rows to selected countries using fixed percentages."""
     total_rows = len(df)
     active_distribution = {k: v for k, v in default_distribution.items() if k in selected_countries}
-    
-    # Normalize percentages to exclude deselected countries
     total_percentage = sum(v[0] for v in active_distribution.values())
     adjusted_distribution = {k: (v[0] / total_percentage, v[1]) for k, v in active_distribution.items()}
-
-    # Calculate row distribution using rounding logic
     country_rows = {k: math.floor(v[0] * total_rows) for k, v in adjusted_distribution.items()}
     assigned_rows = sum(country_rows.values())
-
-    # Distribute remaining rows
     remaining_rows = total_rows - assigned_rows
     sorted_countries = sorted(active_distribution.keys(), key=lambda c: -adjusted_distribution[c][0])
-    
     for i in range(remaining_rows):
         country_rows[sorted_countries[i % len(sorted_countries)]] += 1
-
-    # Assign rows to countries
     df_list = []
     country_counts = []
     start_idx = 0
-
     for country, code in [(k, adjusted_distribution[k][1]) for k in sorted_countries]:
         count = country_rows[country]
         if count > 0:
@@ -84,21 +97,15 @@ def distribute_countries(df, selected_countries):
             df_list.append(df_subset)
             start_idx += count
             country_counts.append({"Country": country, "Country Code": code, "Assigned Rows": count})
-
-    # Add total row
     country_counts.append({"Country": "**Total**", "Country Code": "", "Assigned Rows": total_rows})
-
     return pd.concat(df_list, ignore_index=True), country_counts
 
 def merge_csv_files(files, selected_countries):
-    """Reads, repairs, merges, and sorts multiple CSV files."""
     dataframes = []
     file_stats = []
     total_rows = 0
-
     for file in files:
         delimiter = detect_delimiter(file)
-        
         try:
             df, row_count = repair_csv(file, delimiter)
             dataframes.append(df)
@@ -106,25 +113,18 @@ def merge_csv_files(files, selected_countries):
             total_rows += row_count
         except Exception as e:
             st.error(f"⚠️ Error processing {file.name}: {e}")
-    
     if dataframes:
         merged_df = pd.concat(dataframes, ignore_index=True)
-
         if 'CATEGORY' in merged_df.columns:
             merged_df = merged_df.sort_values(by='CATEGORY', ascending=True)
-
         merged_df, country_counts = distribute_countries(merged_df, selected_countries)
-
         file_stats.append({"Filename": "**Total**", "Rows (Excluding Header)": total_rows})
-
         return merged_df, file_stats, country_counts
-
     return None, file_stats, []
 
 # Streamlit UI
-st.title("📊 ")
+st.title("📊 PIM QC Data Processor")
 
-# Country selection
 selected_countries = st.multiselect(
     "Select countries for distribution:",
     options=list(default_distribution.keys()),
@@ -136,29 +136,31 @@ uploaded_files = st.file_uploader("Upload CSV files", type=["csv"], accept_multi
 if uploaded_files:
     merged_df, file_stats, country_counts = merge_csv_files(uploaded_files, selected_countries)
 
-    if file_stats:
-        st.write("### File Stats (Rows Excluding Header):")
-        file_stats_df = pd.DataFrame(file_stats)
-        st.dataframe(file_stats_df)
-
-    if country_counts:
-        st.write("### Row Distribution per Country:")
-        country_counts_df = pd.DataFrame(country_counts)
-        st.dataframe(country_counts_df)
-
     if merged_df is not None:
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        output_excel = io.BytesIO()
+        final_filename = generate_filename("PIM QC ALL COUNTRIES")
+        
+        with pd.ExcelWriter(output_excel, engine="xlsxwriter") as writer:
             merged_df.to_excel(writer, sheet_name="Merged Data", index=False)
-            country_counts_df.to_excel(writer, sheet_name="Country Distribution", index=False)
-        output.seek(0)
+        output_excel.seek(0)
 
-        st.write("### Merged Data Preview:")
-        st.dataframe(merged_df.head())
+        st.write("### File Statistics")
+        st.table(file_stats)
+
+        st.write("### Country Distribution")
+        st.table(country_counts)
 
         st.download_button(
-            label="📥 Download Grouped Excel",
-            data=output,
-            file_name="sorted_merged_data_grouped_by_countries.xlsx",
+            label="📥 Download Merged Excel",
+            data=output_excel,
+            file_name=final_filename,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+        zip_file_buffer = save_individual_country_files(merged_df, country_counts)
+        st.download_button(
+            label="📥 Download All Country Files (ZIP)",
+            data=zip_file_buffer,
+            file_name=generate_filename("PIM QC ALL COUNTRIES", "zip"),
+            mime="application/zip"
         )
