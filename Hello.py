@@ -13,7 +13,7 @@ import time
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Jumia Product Scraper", page_icon="🛒", layout="wide")
 
-st.title("🛒 Jumia Product Information Scraper (V6.1 - Category Finalized)")
+st.title("🛒 Jumia Product Information Scraper (V6.2 - FINAL)")
 st.markdown("Enter a Jumia product URL below to extract details, images, and prices.")
 
 # --- SIDEBAR: SETUP INSTRUCTIONS ---
@@ -58,7 +58,7 @@ def get_driver():
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
     return driver
 
-# --- 2. SCRAPING FUNCTION (V6.1 FINAL) ---
+# --- 2. SCRAPING FUNCTION (V6.2 FINAL) ---
 def scrape_jumia(url):
     """Scrapes data with maximum robustness, excluding Model/Config."""
     driver = get_driver()
@@ -94,21 +94,23 @@ def scrape_jumia(url):
              data['Brand'] = data['Product Name'].split()[0]
 
 
-        # 3. Seller Name (V6.1 FIX: Targeting 'Seller Information' link)
+        # 3. Seller Name (V6.2 DEFINITIVE FIX)
         data['Seller Name'] = "N/A"
         
         try:
-            seller_info_block = soup.find('div', class_=lambda x: x and 'card' in x and 'seller-info' in x) 
-            if seller_info_block:
-                seller_name_tag = seller_info_block.find('a', href=re.compile(r'/seller/|/sp-'))
+            # Target the container with the seller stats
+            seller_stats_container = soup.find('div', class_='-hr -pas')
+            if seller_stats_container:
+                # Find the seller name in the specific <p> tag ('-m -pbs')
+                seller_name_tag = seller_stats_container.find('p', class_='-m -pbs')
                 if seller_name_tag:
                     data['Seller Name'] = seller_name_tag.text.strip()
-                elif seller_info_block.find('b'):
-                     data['Seller Name'] = seller_info_block.find('b').text.strip()
+            
         except Exception:
             pass
         
-        if data['Seller Name'].lower() in ['details', 'follow', 'visit store', 'sell on jumia']:
+        # Fallback/Cleanup: If the specific tags are missing or text is generic
+        if data['Seller Name'].lower() in ['details', 'follow', 'sell on jumia', 'n/a']:
              data['Seller Name'] = "N/A"
 
 
@@ -119,7 +121,7 @@ def scrape_jumia(url):
             if category_container:
                 category_links = category_container.find_all('a')
             else:
-                 # Fallback to general search
+                # Fallback to general search (usually not hit now)
                 category_links = driver.find_elements(By.XPATH, "//ol//li//a | //nav//li//a | //div[contains(@class, 'brcbs')]//a")
             
             for link in category_links:
@@ -131,7 +133,7 @@ def scrape_jumia(url):
             
         data['Category'] = " > ".join(list(dict.fromkeys(cats))) if cats else "N/A"
 
-        # 5. SKU
+        # 5. SKU 
         data['SKU'] = "N/A"
         
         # Look in spec list items
