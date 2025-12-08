@@ -13,7 +13,7 @@ import time
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Jumia Product Scraper", page_icon="🛒", layout="wide")
 
-st.title("🛒 Jumia Product Information Scraper (V6.0 - Final)")
+st.title("🛒 Jumia Product Information Scraper (V6.1 - Category Finalized)")
 st.markdown("Enter a Jumia product URL below to extract details, images, and prices.")
 
 # --- SIDEBAR: SETUP INSTRUCTIONS ---
@@ -33,7 +33,6 @@ chromium-driver""", language="text")
 def get_driver():
     """Initializes the Chrome Driver with dual-environment support (Cloud & Local)."""
     chrome_options = Options()
-    # Essential options for headless execution/Cloud deployment
     chrome_options.add_argument("--headless=new") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
@@ -45,24 +44,21 @@ def get_driver():
     chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
     driver = None
-    # 1. Try Streamlit Cloud Path (Linux default)
     try:
         service = Service(executable_path="/usr/bin/chromedriver")
         chrome_options.binary_location = "/usr/bin/chromium"
         driver = webdriver.Chrome(service=service, options=chrome_options)
     except Exception:
-        # 2. Fallback to Local/Automatic Path (Windows/Mac)
         try:
             driver = webdriver.Chrome(options=chrome_options)
         except Exception as e:
             st.error(f"Failed to initialize driver: {e}")
             return None
             
-    # Stealth mode to avoid detection
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
     return driver
 
-# --- 2. SCRAPING FUNCTION (V6.0 FINAL) ---
+# --- 2. SCRAPING FUNCTION (V6.1 FINAL) ---
 def scrape_jumia(url):
     """Scrapes data with maximum robustness, excluding Model/Config."""
     driver = get_driver()
@@ -98,33 +94,33 @@ def scrape_jumia(url):
              data['Brand'] = data['Product Name'].split()[0]
 
 
-        # 3. Seller Name (V6.0 FIX: Targeting 'Seller Information' link)
+        # 3. Seller Name (V6.1 FIX: Targeting 'Seller Information' link)
         data['Seller Name'] = "N/A"
         
         try:
-            # Locate the 'Seller Information' section and get the first useful link within it
             seller_info_block = soup.find('div', class_=lambda x: x and 'card' in x and 'seller-info' in x) 
             if seller_info_block:
                 seller_name_tag = seller_info_block.find('a', href=re.compile(r'/seller/|/sp-'))
                 if seller_name_tag:
                     data['Seller Name'] = seller_name_tag.text.strip()
-                # Fallback to bold text (like 'Betech Store' in the screenshot)
                 elif seller_info_block.find('b'):
                      data['Seller Name'] = seller_info_block.find('b').text.strip()
         except Exception:
             pass
         
-        # Final cleanup for the common failure case
         if data['Seller Name'].lower() in ['details', 'follow', 'visit store', 'sell on jumia']:
              data['Seller Name'] = "N/A"
 
 
-        # 4. Category (V6.0 FIX: Targeting structure shown in screenshot)
+        # 4. Category (V6.1 FIX: Definitive Fix using 'brcbs' class)
         cats = []
         try:
-            # Target the list structure at the top of the page
-            category_xpath = "//nav//ol//li//a | //div[contains(@class, 'breadcrumb')]//a"
-            category_links = driver.find_elements(By.XPATH, category_xpath)
+            category_container = soup.find('div', class_='brcbs')
+            if category_container:
+                category_links = category_container.find_all('a')
+            else:
+                 # Fallback to general search
+                category_links = driver.find_elements(By.XPATH, "//ol//li//a | //nav//li//a | //div[contains(@class, 'brcbs')]//a")
             
             for link in category_links:
                 txt = link.text.strip()
@@ -135,7 +131,7 @@ def scrape_jumia(url):
             
         data['Category'] = " > ".join(list(dict.fromkeys(cats))) if cats else "N/A"
 
-        # 5. SKU (Model/Config Logic Removed)
+        # 5. SKU
         data['SKU'] = "N/A"
         
         # Look in spec list items
@@ -151,7 +147,7 @@ def scrape_jumia(url):
              if match:
                  data['SKU'] = match.group(1)
 
-        # 6. Images (Confirmed Working)
+        # 6. Images 
         imgs = []
         for img in soup.find_all('img'):
             src = img.get('data-src') or img.get('src')
@@ -191,7 +187,6 @@ if st.button("Fetch Product Data", type="primary"):
             scraped_data = scrape_jumia(url_input)
             
             if scraped_data:
-                # Store data in session state for persistence
                 st.session_state['product_data'] = scraped_data
                 st.session_state['url'] = url_input
                 st.success("Data fetched!")
@@ -204,7 +199,6 @@ if st.session_state.product_data:
     
     with col1:
         st.subheader("📋 Product Details")
-        # Prepare table data, excluding Image URLs
         display_dict = {k: v for k, v in data.items() if k != 'Image URLs'}
         df_display = pd.DataFrame([{'Attribute': k, 'Value': v} for k, v in display_dict.items()])
         st.table(df_display.set_index('Attribute'))
