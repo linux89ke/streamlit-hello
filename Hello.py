@@ -102,6 +102,7 @@ if st.button("Fetch Product Data", type="primary"):
                 
                 # 2. Brand
                 brand_text = "N/A"
+                # Primary search: common Jumia structure
                 brand_container = soup.find('div', class_='-fs16')
                 if brand_container and 'Brand:' in brand_container.text:
                     brand_link = brand_container.find('a')
@@ -111,12 +112,21 @@ if st.button("Fetch Product Data", type="primary"):
                 product_data['Brand'] = brand_text
                 
                 # 3. Seller Name
-                seller_name = "N/A" # Initialize
+                seller_name = "N/A"
+                # Primary search: Find link associated with seller info
                 seller_link = soup.find('a', href=re.compile(r'/seller/'))
                 if seller_link:
                     seller_name = seller_link.text.strip()
                 
-                # *** FIX: Assign the value regardless of whether the link was found ***
+                # Fallback search: Check near "Seller Score"
+                if seller_name == "N/A":
+                    score_element = soup.find('div', text=re.compile(r'Seller Score'))
+                    if score_element and score_element.parent:
+                        # Seller name is often a sibling or grandparent's child
+                        seller_link_fallback = score_element.find_previous('a')
+                        if seller_link_fallback and 'href' in seller_link_fallback.attrs and '/seller/' in seller_link_fallback['href']:
+                             seller_name = seller_link_fallback.text.strip()
+
                 product_data['Seller Name'] = seller_name
                 
                 # 4. SKU and 5. Model/Config
@@ -131,18 +141,25 @@ if st.button("Fetch Product Data", type="primary"):
 
                 # Model/Config: Search for "Model:" or infer from title
                 config = "N/A"
-                model_match = re.search(r'Model:\s*([A-Z0-9\-\/]+)', all_text, re.I)
+                # Strict regex to capture the model number and nothing else
+                model_match = re.search(r'(Model|Config):\s*([A-Z0-9\-\/]+)', all_text, re.I)
                 if model_match:
-                    config = model_match.group(1).strip()
+                    config = model_match.group(2).strip()
                 elif product_name:
+                    # Try to find a code that looks like a model number in the title
                     model_in_title = re.search(r'([A-Z]{3,}\d{3,}[A-Z0-9]*)', product_name)
                     if model_in_title:
                         config = model_in_title.group(1)
+
+                # Final Cleanup Check for Model/Config (Remove trailing non-model words)
+                if config != "N/A":
+                    config = re.sub(r'Weight|Width|Inches|Screen$', '', config).strip()
 
                 product_data['Model/Config'] = config
                 
                 # 6. Category - Parse breadcrumb navigation
                 categories = []
+                # Jumia breadcrumb links typically use class '_aj'
                 nav_elements = soup.find_all('a', class_='_aj') 
                 
                 for link in nav_elements:
@@ -155,9 +172,13 @@ if st.button("Fetch Product Data", type="primary"):
                 
                 # 7. Image URLs
                 images = []
-                img_elements = soup.find_all('img', src=re.compile(r'jumia\.is/product/'))
-                
+                # Try common Jumia image sources
+                img_elements = soup.find_all('img', {'data-src': re.compile(r'jumia\.is/product/')})
+                if not img_elements:
+                    img_elements = soup.find_all('img', {'src': re.compile(r'jumia\.is/product/')})
+
                 for img in img_elements:
+                    # Look for data-src first (high-res), then src
                     img_url = img.get('data-src') or img.get('src')
                     if img_url and 'jumia.is' in img_url:
                         if img_url.startswith('//'): 
@@ -248,7 +269,6 @@ if st.button("Fetch Product Data", type="primary"):
                 """)
         
         finally:
-            # Ensure browser is closed even if an error occurs
             if driver:
                 try:
                     driver.quit()
