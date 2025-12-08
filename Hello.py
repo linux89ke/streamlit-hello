@@ -14,10 +14,10 @@ import os
 st.set_page_config(page_title="Jumia Product Scraper", page_icon="🛒", layout="wide")
 
 st.title("🛒 Jumia Product Information Scraper")
-st.markdown("Enter a Jumia product URL to extract product details")
+st.markdown("Enter a Jumia product URL to extract product details.")
 
-# Installation instructions
-with st.expander("📦 Streamlit Cloud Setup (packages.txt/requirements.txt)"):
+# Installation instructions for Streamlit Cloud
+with st.expander("📦 Streamlit Cloud Setup (Deployment Files)"):
     st.code("""
 # requirements.txt:
 streamlit
@@ -25,7 +25,7 @@ selenium
 beautifulsoup4
 pandas
 
-# packages.txt: (for Streamlit Cloud on Linux)
+# packages.txt: (Required for Streamlit Cloud to install Chrome dependencies)
 chromium
 chromium-driver
     """, language="bash")
@@ -56,26 +56,24 @@ if st.button("Fetch Product Data", type="primary"):
                 chrome_options.add_argument("--window-size=1920,1080")
                 chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
                 
-                # Streamlined Driver Initialization
+                # Streamlined Driver Initialization (Prioritizes Streamlit Cloud setup)
                 try:
                     # Attempt Streamlit Cloud/Linux path setup
                     service = Service(executable_path="/usr/bin/chromedriver")
                     chrome_options.binary_location = "/usr/bin/chromium"
                     driver = webdriver.Chrome(service=service, options=chrome_options)
-                    st.info("Using Streamlit Cloud/Linux configuration.")
-                except:
-                    # Fallback for local environments (requires local setup)
+                except Exception as e_cloud:
+                    # Fallback for local environments
                     try:
                         driver = webdriver.Chrome(options=chrome_options)
-                        st.info("Using local Chrome configuration.")
                     except Exception as e_local:
-                        st.error(f"Could not initialize Chrome driver. Local Error: {str(e_local)}")
+                        st.error(f"Could not initialize Chrome driver. Cloud Error: {str(e_cloud)}. Local Error: {str(e_local)}")
                         raise Exception("Failed to create driver instance.")
                 
                 if not driver:
                     raise Exception("Failed to create driver instance")
                 
-                # Hide webdriver property
+                # Hide webdriver property to reduce bot detection risk
                 driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
             
             with st.spinner("Fetching product data..."):
@@ -83,14 +81,11 @@ if st.button("Fetch Product Data", type="primary"):
                 driver.get(url)
                 
                 # Wait for main product content to load (e.g., the title h1)
-                try:
-                    WebDriverWait(driver, 15).until(
-                        EC.presence_of_element_located((By.TAG_NAME, "h1"))
-                    )
-                except:
-                    st.warning("Page loading timeout. Continuing with available content.")
+                WebDriverWait(driver, 15).until(
+                    EC.presence_of_element_located((By.TAG_NAME, "h1"))
+                )
                 
-                # Scroll down slightly to ensure dynamic content loads (like seller info)
+                # Scroll down slightly to ensure dynamic content loads
                 driver.execute_script("window.scrollTo(0, 300);")
                 time.sleep(2) 
                 
@@ -107,67 +102,55 @@ if st.button("Fetch Product Data", type="primary"):
                 
                 # 2. Brand
                 brand_text = "N/A"
-                # Look for the brand link associated with the label
-                brand_link_elem = soup.find('a', href=re.compile(r'/catalog/\?q='))
-                if brand_link_elem:
-                    # Brand is often the first part of the link text or the link itself
-                    brand_text = brand_link_elem.text.strip()
-                elif 'Brand:' in all_text:
-                    # Fallback to regex search
-                    match = re.search(r'Brand:\s*([A-Za-z0-9\s]+?)(?:\||\n)', all_text, re.I | re.DOTALL)
-                    if match:
-                        brand_text = match.group(1).strip()
+                # Target brand link (often near a "Brand:" label, using common Jumia structure)
+                brand_container = soup.find('div', class_='-fs16') # General container for metadata
+                if brand_container and 'Brand:' in brand_container.text:
+                    brand_link = brand_container.find('a')
+                    if brand_link:
+                        brand_text = brand_link.text.strip()
                 
                 product_data['Brand'] = brand_text
                 
                 # 3. Seller Name
                 seller_name = "N/A"
-                # The seller name is often wrapped in a tag near "Seller Score"
-                seller_elem = soup.find('a', href=re.compile(r'/seller/'))
-                if seller_elem:
-                    seller_name = seller_elem.text.strip()
-                elif 'Seller Score' in all_text:
-                    # Fallback: search text near the score
-                    match = re.search(r'([A-Z0-9\s]+)\s*\d+%', all_text)
-                    if match:
-                        seller_name = match.group(1).strip()
+                # Target seller link (often href contains /seller/ or has a specific wrapper)
+                seller_link = soup.find('a', href=re.compile(r'/seller/'))
+                if seller_link:
+                    seller_name = seller_link.text.strip()
                 
-                product_data['Seller Name'] = seller_name
+                # 4. SKU and 5. Model/Config - Get detailed info
                 
-                # 4. SKU and 5. Model/Config - Search through text and URL
-                
-                # SKU: Try to extract from URL if not found in page text (Jumia often uses the product ID as the SKU)
-                product_data['SKU'] = url.split('-')[-1].split('.')[0] if '.' in url.split('-')[-1] else "N/A"
-                
-                # Check page text for a formal SKU
+                # SKU: Search page text for formal Jumia SKU (e.g., VI505EA5OP0J4NAFAMZGTIN)
                 sku_match = re.search(r'SKU:\s*([A-Z0-9]+)', all_text, re.I)
                 if sku_match:
                     product_data['SKU'] = sku_match.group(1).strip()
+                else:
+                    # Fallback to product ID from URL
+                    product_data['SKU'] = url.split('-')[-1].split('.')[0] if '.' in url.split('-')[-1] else "N/A"
 
-                # Model/Config: Often present in the h1 text itself or specifications
-                model_match = re.search(r'Model:\s*([A-Z0-9\-\/]+)', all_text, re.I)
-                # If not found, try to infer from product name (e.g., HTC4300QFS)
+                # Model/Config: Search for "Model:" or infer from title
                 config = "N/A"
+                model_match = re.search(r'Model:\s*([A-Z0-9\-\/]+)', all_text, re.I)
                 if model_match:
+                    # Group 1 captures the model number, stopping before next word or space
                     config = model_match.group(1).strip()
-                elif product_name and product_data['Brand'] != "N/A":
+                elif product_name:
                     # Try to find a code that looks like a model number in the title
-                    title_parts = product_data['Product Name'].replace(product_data['Brand'], '').strip().split()
-                    potential_model = [p for p in title_parts if re.search(r'[A-Z0-9]{5,}', p)]
-                    if potential_model:
-                        config = potential_model[0]
-                
+                    model_in_title = re.search(r'([A-Z]{3,}\d{3,}[A-Z0-9]*)', product_name)
+                    if model_in_title:
+                        config = model_in_title.group(1)
+
                 product_data['Model/Config'] = config
                 
                 # 6. Category - Parse breadcrumb navigation
                 categories = []
-                # Jumia breadcrumb links use class '_aj'
+                # Jumia breadcrumb links typically use class '_aj'
                 nav_elements = soup.find_all('a', class_='_aj') 
                 
                 for link in nav_elements:
                     text = link.text.strip()
-                    # Filter out 'Home' and the last element if it matches the product name
-                    if text and text.lower() not in ['home', 'jumia'] and text not in product_data['Product Name']:
+                    # Filter out 'Home', 'Jumia', and the product name itself
+                    if text and text.lower() not in ['home', 'jumia'] and text != product_data['Product Name']:
                         categories.append(text)
                 
                 # Remove duplicates while preserving order
@@ -176,10 +159,11 @@ if st.button("Fetch Product Data", type="primary"):
                 
                 # 7. Image URLs
                 images = []
-                # Find the main image using common Jumia image attributes
+                # Find the main image and gallery thumbnails
                 img_elements = soup.find_all('img', src=re.compile(r'jumia\.is/product/'))
                 
                 for img in img_elements:
+                    # Look for data-src first (high-res), then src
                     img_url = img.get('data-src') or img.get('src')
                     if img_url and 'jumia.is' in img_url:
                         # Ensure the URL is absolute
@@ -197,7 +181,7 @@ if st.button("Fetch Product Data", type="primary"):
                 # --- DISPLAY RESULTS ---
                 st.success("✅ Product data fetched successfully!")
                 
-                # Filter data for display table based on user request
+                # Prepare data for display table based on user request order
                 display_data = {
                     'Product Name': product_data['Product Name'],
                     'Brand': product_data['Brand'],
@@ -207,13 +191,11 @@ if st.button("Fetch Product Data", type="primary"):
                     'Model/Config': product_data['Model/Config'],
                 }
                 
-                # Create two columns
                 col1, col2 = st.columns([1, 1])
                 
                 with col1:
                     st.subheader("📋 Requested Product Details")
                     
-                    # Convert dict to DataFrame for clean display
                     display_df = pd.DataFrame([{'Key': k, 'Value': v} for k, v in display_data.items()])
                     st.table(display_df.set_index('Key'))
 
@@ -223,7 +205,6 @@ if st.button("Fetch Product Data", type="primary"):
                         images = product_data['Image URLs']
                         st.write(f"Found **{len(images)}** images.")
                         
-                        # Display first image as preview
                         try:
                             st.image(images[0], caption="Main Product Image Preview", use_column_width=True)
                         except:
@@ -268,13 +249,13 @@ if st.button("Fetch Product Data", type="primary"):
                 st.markdown("""
                 **Common issues and solutions:**
                 
-                1. **If deploying to Streamlit Cloud:** Ensure your `packages.txt` and `requirements.txt` files are correct as per the instructions above.
+                1. **If deploying to Streamlit Cloud:** Ensure your `packages.txt` and `requirements.txt` files are correct.
                 2. **"Failed to create driver instance" (Local):** Make sure you have Google Chrome installed and that your Selenium version is recent (`pip install --upgrade selenium`).
-                3. **Elements not found:** The website structure may have changed. The scraper needs to be updated to match new Jumia HTML classes/tags.
+                3. **Elements not found:** The website structure may have changed. The scraper logic might need a small update to match new Jumia HTML classes/tags.
                 """)
         
         finally:
-            # Make sure browser is closed
+            # Ensure browser is closed even if an error occurs
             if driver:
                 try:
                     driver.quit()
