@@ -13,7 +13,7 @@ import time
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Jumia Product Scraper", page_icon="🛒", layout="wide")
 
-st.title("🛒 Jumia Product Information Scraper (V6.2 - FINAL)")
+st.title("🛒 Jumia Product Information Scraper (V6.3 - Horizontal Table)")
 st.markdown("Enter a Jumia product URL below to extract details, images, and prices.")
 
 # --- SIDEBAR: SETUP INSTRUCTIONS ---
@@ -58,7 +58,7 @@ def get_driver():
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
     return driver
 
-# --- 2. SCRAPING FUNCTION (V6.2 FINAL) ---
+# --- 2. SCRAPING FUNCTION (V6.3 FINAL) ---
 def scrape_jumia(url):
     """Scrapes data with maximum robustness, excluding Model/Config."""
     driver = get_driver()
@@ -98,10 +98,8 @@ def scrape_jumia(url):
         data['Seller Name'] = "N/A"
         
         try:
-            # Target the container with the seller stats
             seller_stats_container = soup.find('div', class_='-hr -pas')
             if seller_stats_container:
-                # Find the seller name in the specific <p> tag ('-m -pbs')
                 seller_name_tag = seller_stats_container.find('p', class_='-m -pbs')
                 if seller_name_tag:
                     data['Seller Name'] = seller_name_tag.text.strip()
@@ -109,7 +107,6 @@ def scrape_jumia(url):
         except Exception:
             pass
         
-        # Fallback/Cleanup: If the specific tags are missing or text is generic
         if data['Seller Name'].lower() in ['details', 'follow', 'sell on jumia', 'n/a']:
              data['Seller Name'] = "N/A"
 
@@ -121,7 +118,6 @@ def scrape_jumia(url):
             if category_container:
                 category_links = category_container.find_all('a')
             else:
-                # Fallback to general search (usually not hit now)
                 category_links = driver.find_elements(By.XPATH, "//ol//li//a | //nav//li//a | //div[contains(@class, 'brcbs')]//a")
             
             for link in category_links:
@@ -197,10 +193,36 @@ if st.button("Fetch Product Data", type="primary"):
 if st.session_state.product_data:
     data = st.session_state.product_data
     
+    # --- HORIZONTAL DATA OUTPUT (NEW) ---
+    st.subheader("📋 Horizontal Data Output (Copyable Table)")
+    st.markdown("Use this table for easy copy-pasting into spreadsheets/documents.")
+
+    # Prepare the single row of data
+    first_image_url = data['Image URLs'][0] if data['Image URLs'] else "N/A"
+    
+    horizontal_data = {
+        'Seller Name': [data['Seller Name']],
+        'SKU': [data['SKU']],
+        'config': ['N/A'], # Placeholder for config, as it was removed from extraction
+        'Product Name': [data['Product Name']],
+        'Brand': [data['Brand']],
+        'Category': [data['Category']],
+        'Image URL': [first_image_url]
+    }
+    
+    column_order = ['Seller Name', 'SKU', 'config', 'Product Name', 'Brand', 'Category', 'Image URL']
+    
+    df_horizontal = pd.DataFrame(horizontal_data, columns=column_order)
+
+    # Display the DataFrame horizontally without index for easy copy-pasting
+    st.dataframe(df_horizontal, hide_index=True)
+    
+    # --- VERTICAL DATA OUTPUT (FOR REFERENCE) ---
+
     col1, col2 = st.columns([1, 1])
     
     with col1:
-        st.subheader("📋 Product Details")
+        st.subheader("📋 Requested Product Details (Vertical View)")
         display_dict = {k: v for k, v in data.items() if k != 'Image URLs'}
         df_display = pd.DataFrame([{'Attribute': k, 'Value': v} for k, v in display_dict.items()])
         st.table(df_display.set_index('Attribute'))
@@ -217,7 +239,7 @@ if st.session_state.product_data:
 
     st.markdown("---")
     
-    # CSV Preparation
+    # --- DOWNLOAD CSV ---
     csv_dict = {'URL': [st.session_state.url]}
     for k, v in data.items():
         if k != 'Image URLs':
