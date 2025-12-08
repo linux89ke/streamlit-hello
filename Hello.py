@@ -13,7 +13,7 @@ import time
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Jumia Product Scraper", page_icon="🛒", layout="wide")
 
-st.title("🛒 Jumia Product Information Scraper (V6.3 - Horizontal Table)")
+st.title("🛒 Jumia Product Information Scraper (V6.4 - Final Format)")
 st.markdown("Enter a Jumia product URL below to extract details, images, and prices.")
 
 # --- SIDEBAR: SETUP INSTRUCTIONS ---
@@ -58,7 +58,7 @@ def get_driver():
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
     return driver
 
-# --- 2. SCRAPING FUNCTION (V6.3 FINAL) ---
+# --- 2. SCRAPING FUNCTION (V6.4 FINAL) ---
 def scrape_jumia(url):
     """Scrapes data with maximum robustness, excluding Model/Config."""
     driver = get_driver()
@@ -193,7 +193,7 @@ if st.button("Fetch Product Data", type="primary"):
 if st.session_state.product_data:
     data = st.session_state.product_data
     
-    # --- HORIZONTAL DATA OUTPUT (NEW) ---
+    # --- HORIZONTAL DATA OUTPUT ---
     st.subheader("📋 Horizontal Data Output (Copyable Table)")
     st.markdown("Use this table for easy copy-pasting into spreadsheets/documents.")
 
@@ -203,7 +203,7 @@ if st.session_state.product_data:
     horizontal_data = {
         'Seller Name': [data['Seller Name']],
         'SKU': [data['SKU']],
-        'config': ['N/A'], # Placeholder for config, as it was removed from extraction
+        'config': [data['SKU']], # <-- SKU MIRRORED HERE
         'Product Name': [data['Product Name']],
         'Brand': [data['Brand']],
         'Category': [data['Category']],
@@ -214,7 +214,6 @@ if st.session_state.product_data:
     
     df_horizontal = pd.DataFrame(horizontal_data, columns=column_order)
 
-    # Display the DataFrame horizontally without index for easy copy-pasting
     st.dataframe(df_horizontal, hide_index=True)
     
     # --- VERTICAL DATA OUTPUT (FOR REFERENCE) ---
