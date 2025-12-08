@@ -11,9 +11,9 @@ import re
 import time
 import os
 
-st.set_page_config(page_title="Jumia Product Scraper", page_icon="🛒", layout="wide")
+st.set_page_config(page_title="Jumia Product Scraper (Final)", page_icon="🛒", layout="wide")
 
-st.title("🛒 Jumia Product Information Scraper (Robust Version)")
+st.title("🛒 Jumia Product Information Scraper (Final Robust Version)")
 st.markdown("Enter a Jumia product URL to extract product details.")
 
 # Installation instructions for Streamlit Cloud
@@ -94,9 +94,10 @@ if st.button("Fetch Product Data", type="primary"):
                 product_name = product_name_elem.text.strip() if product_name_elem else "N/A"
                 product_data['Product Name'] = product_name
                 
-                # 2. Brand (Using XPath fallback: looking for the link in the element that starts with 'Brand:')
+                # 2. Brand (Using XPath fallback)
                 brand_text = "N/A"
                 try:
+                    # XPath: Look for the <a> tag that is a child of the element containing the text 'Brand:'
                     brand_elem_xpath = driver.find_element(By.XPATH, "//div[contains(., 'Brand:')]/a")
                     brand_text = brand_elem_xpath.text.strip()
                 except:
@@ -108,14 +109,15 @@ if st.button("Fetch Product Data", type="primary"):
                 
                 product_data['Brand'] = brand_text
                 
-                # 3. Seller Name (Using XPath fallback: looking for link near text 'Seller Score')
+                # 3. Seller Name (FINAL FIX using robust XPath)
                 seller_name = "N/A"
                 try:
-                    # Look for the link that is a preceding sibling to the Seller Score/Rating box
-                    seller_elem_xpath = driver.find_element(By.XPATH, "//div[contains(., 'Seller Score')]/ancestor::div[1]/preceding-sibling::div[1]/a")
+                    # XPath: Find the link that precedes the 'Seller Score' container
+                    # This targets the <a> tag holding the seller's name
+                    seller_elem_xpath = driver.find_element(By.XPATH, "//div[contains(., 'Seller Score')]/ancestor::div[1]/preceding-sibling::div[1]/a[1]")
                     seller_name = seller_elem_xpath.text.strip()
                 except:
-                    # Simpler link search (often used for the seller name link)
+                    # Fallback: Simple link search
                     seller_link = soup.find('a', href=re.compile(r'/seller/'))
                     if seller_link:
                         seller_name = seller_link.text.strip()
@@ -129,7 +131,7 @@ if st.button("Fetch Product Data", type="primary"):
                 else:
                     product_data['SKU'] = url.split('-')[-1].split('.')[0] if '.' in url.split('-')[-1] else "N/A"
 
-                # 5. Model/Config (Strictly from the Product Name, fixing the 'Weight' issue)
+                # 5. Model/Config (Fixed cleanup issue by strict regex on title)
                 config = "N/A"
                 # Search for alphanumeric model numbers in the title (e.g., HTC4300QFS)
                 model_in_title = re.search(r'([A-Z]{3,}\d{3,}[A-Z0-9]*)', product_name)
@@ -138,29 +140,24 @@ if st.button("Fetch Product Data", type="primary"):
                 
                 product_data['Model/Config'] = config
                 
-                # 6. Category (Using XPath: find all links in the breadcrumb navigation)
+                # 6. Category (FINAL FIX using robust XPath for breadcrumbs)
                 categories = []
                 try:
-                    # Find all links within the div containing the breadcrumbs (typically near the top)
-                    category_links = driver.find_elements(By.XPATH, "//div[contains(@class, 'nav') or contains(@class, 'breadcrumb')]//a")
+                    # XPath: Find all <a> tags within the ordered list (OL) structure of the breadcrumbs
+                    category_links = driver.find_elements(By.XPATH, "//ol//li//a")
                     for link in category_links:
                         text = link.text.strip()
                         if text and text.lower() not in ['home', 'jumia'] and text != product_data['Product Name']:
                             categories.append(text)
-                except:
-                    # Fallback to BeautifulSoup if Selenium link finding fails
-                    nav_elements = soup.find_all('a', class_=re.compile(r'_aj|link')) 
-                    for link in nav_elements:
-                        text = link.text.strip()
-                        if text and text.lower() not in ['home', 'jumia'] and text != product_data['Product Name']:
-                            categories.append(text)
+                except Exception:
+                    pass # If XPath fails, categories remains empty
 
                 unique_cats = list(dict.fromkeys(categories))
                 product_data['Category'] = " > ".join(unique_cats) if unique_cats else "N/A"
                 
-                # 7. Image URLs (Robust Search)
+                # 7. Image URLs 
                 images = []
-                # Find all images with the Jumia product domain
+                # Search for the primary image data attribute
                 img_elements = soup.find_all('img', {'data-src': re.compile(r'jumia\.is/product/|jfs')})
                 
                 for img in img_elements:
