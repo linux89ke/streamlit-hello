@@ -13,7 +13,7 @@ import time
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Jumia Product Scraper", page_icon="🛒", layout="wide")
 
-st.title("🛒 Jumia Product Information Scraper (Robust)")
+st.title("🛒 Jumia Product Information Scraper (V4.0 - Final Fixes)")
 st.markdown("Enter a Jumia product URL below to extract details, images, and prices.")
 
 # --- SIDEBAR: SETUP INSTRUCTIONS ---
@@ -58,13 +58,12 @@ def get_driver():
             st.error(f"Failed to initialize driver: {e}")
             return None
             
-    # Stealth mode to avoid detection
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
     return driver
 
-# --- 2. SCRAPING FUNCTION ---
+# --- 2. SCRAPING FUNCTION (V4.0 FIXES) ---
 def scrape_jumia(url):
-    """Scrapes data using text-based anchoring (v3.0)."""
+    """Scrapes data from the given Jumia URL."""
     driver = get_driver()
     if not driver:
         return None
@@ -84,56 +83,63 @@ def scrape_jumia(url):
         
         # 2. Brand (Text-Anchor Strategy)
         data['Brand'] = "N/A"
-        # Find the div that explicitly contains text "Brand: "
         brand_label = soup.find(string=re.compile(r"Brand:\s*"))
         if brand_label:
-            # The brand name is usually in a link or sibling span next to "Brand:"
             brand_parent = brand_label.find_parent('div')
             if brand_parent:
                 brand_link = brand_parent.find('a')
                 if brand_link:
                     data['Brand'] = brand_link.text.strip()
                 else:
-                    # Sometimes it's just text next to the label
-                    data['Brand'] = brand_parent.get_text().replace('Brand:', '').strip()
+                    data['Brand'] = brand_parent.get_text().replace('Brand:', '').strip().split()[0]
         
-        if data['Brand'] == "N/A":
+        if data['Brand'] == "N/A" or data['Brand'].lower() == 'jumia':
              # Fallback: Extract from first word of Product Name
              data['Brand'] = data['Product Name'].split()[0]
 
-        # 3. Seller Name (Sidebar Strategy)
+
+        # 3. Seller Name (V4.0 FIX: Filter 'Details', 'Follow', 'Visit Store')
         data['Seller Name'] = "N/A"
-        # Jumia sidebar usually has a distinct section for "Seller Information"
-        # We look for the "Seller Information" header, then find the next link
         seller_header = soup.find(string=re.compile(r"Seller Information|Seller details"))
         if seller_header:
-            # Go up to the container, then find the first link that is NOT "Follow"
             container = seller_header.find_parent('div').find_parent('div')
             if container:
-                seller_link = container.find('a', href=True)
-                if seller_link:
-                     data['Seller Name'] = seller_link.text.strip()
+                all_links = container.find_all('a', href=True)
+                for link in all_links:
+                    text = link.text.strip()
+                    # Only accept text that looks like a store name
+                    if text and text not in ['Details', 'Follow', 'Visit Store', 'Official Store'] and ('/seller/' in link.get('href') or '/sp-' in link.get('href')):
+                        data['Seller Name'] = text
+                        break
+        # Final fallback for Jumia Official Store (common but hard to target consistently)
+        if data['Seller Name'] == "N/A":
+             seller_info = soup.find(string=re.compile(r"Sold by"))
+             if seller_info and 'Official Store' in seller_info.parent.get_text():
+                 data['Seller Name'] = 'Jumia Official Store'
 
-        # 4. Category (Breadcrumb Strategy)
+
+        # 4. Category (V4.0 FIX: Robust XPath for breadcrumbs)
         cats = []
-        # Look for the breadcrumb container via class (common ones: .br-c, .breadcrumbs)
-        # OR look for the <nav> element
-        breadcrumbs = soup.find('div', class_='br-c') or soup.find('nav', {'aria-label': 'Breadcrumb'})
-        if breadcrumbs:
-            links = breadcrumbs.find_all('a')
-            for link in links:
+        try:
+            # Try multiple common breadcrumb paths using XPath (more stable than CSS classes)
+            category_xpath = "//div[contains(@class, 'br-c')]//a | //nav[contains(@aria-label, 'breadcrumb')]//a | //ol[contains(@class, 'breadcrumbs')]//a"
+            category_links = driver.find_elements(By.XPATH, category_xpath)
+            
+            for link in category_links:
                 txt = link.text.strip()
-                if txt.lower() not in ['home', 'jumia']:
+                if txt and txt.lower() not in ['home', 'jumia'] and txt != data['Product Name']:
                     cats.append(txt)
-        data['Category'] = " > ".join(cats) if cats else "N/A"
+        except Exception:
+            pass
+            
+        data['Category'] = " > ".join(list(dict.fromkeys(cats))) if cats else "N/A"
 
-        # 5. SKU & Model (Specification Section Strategy)
-        # Scroll to specs to ensure they are loaded
+        # 5. SKU & Model (Specifications Section Strategy)
         data['SKU'] = "N/A"
         data['Model/Config'] = "N/A"
         
-        # Try to find the "Specifications" list items
-        specs_list = soup.find_all('li', class_='-pvxs') # Common list item class in specs
+        # Look in spec list items
+        specs_list = soup.find_all('li', class_='-pvxs') 
         for item in specs_list:
             text = item.get_text(strip=True)
             if 'SKU' in text:
@@ -141,18 +147,18 @@ def scrape_jumia(url):
             elif 'Model' in text:
                  data['Model/Config'] = text.replace('Model', '').replace(':', '').strip()
         
-        # Fallback for SKU if not found in specs (grab from URL or Script tag)
+        # Fallback for SKU (from URL)
         if data['SKU'] == "N/A":
-             # Jumia often puts the SKU in the URL after the last dash
              match = re.search(r'-([A-Z0-9]+)\.html', url)
              if match:
                  data['SKU'] = match.group(1)
+
 
         # 6. Images
         imgs = []
         for img in soup.find_all('img'):
             src = img.get('data-src') or img.get('src')
-            if src and 'jumia.is' in src and '/product/' in src:
+            if src and 'jumia.is' in src and ('/product/' in src or '/unsafe/' in src):
                 if src.startswith('//'): src = 'https:' + src
                 if src not in imgs: imgs.append(src)
         data['Image URLs'] = imgs
@@ -164,7 +170,12 @@ def scrape_jumia(url):
         return None
     finally:
         driver.quit()
+
 # --- 3. MAIN UI LOGIC ---
+
+# Initialize session state if not already done
+if 'product_data' not in st.session_state:
+    st.session_state['product_data'] = None
 
 url_input = st.text_input("Enter Jumia Product URL:", placeholder="https://www.jumia.co.ke/...")
 
@@ -173,28 +184,24 @@ if st.button("Fetch Product Data", type="primary"):
     if not url_input or "jumia.co.ke" not in url_input:
         st.error("Please enter a valid Jumia Kenya URL")
     else:
-        # Clear previous state if new search
-        if 'product_data' in st.session_state:
-            del st.session_state['product_data']
+        st.session_state['product_data'] = None
             
         with st.spinner("Initializing robust driver & fetching data..."):
             scraped_data = scrape_jumia(url_input)
             
             if scraped_data:
-                # SAVE TO SESSION STATE
                 st.session_state['product_data'] = scraped_data
                 st.session_state['url'] = url_input
                 st.success("Data fetched!")
 
 # --- 4. DISPLAY LOGIC (Run if data exists in session state) ---
-if 'product_data' in st.session_state:
-    data = st.session_state['product_data']
+if st.session_state.product_data:
+    data = st.session_state.product_data
     
     col1, col2 = st.columns([1, 1])
     
     with col1:
         st.subheader("📋 Product Details")
-        # Prepare table data
         display_dict = {k: v for k, v in data.items() if k != 'Image URLs'}
         df_display = pd.DataFrame([{'Attribute': k, 'Value': v} for k, v in display_dict.items()])
         st.table(df_display.set_index('Attribute'))
@@ -203,7 +210,7 @@ if 'product_data' in st.session_state:
         st.subheader("🖼️ Preview")
         if data['Image URLs']:
             st.image(data['Image URLs'][0], caption="Main Image", use_column_width=True)
-            with st.expander("View all found image links"):
+            with st.expander(f"View all {len(data['Image URLs'])} image links"):
                 for link in data['Image URLs']:
                     st.write(link)
         else:
@@ -212,20 +219,17 @@ if 'product_data' in st.session_state:
     st.markdown("---")
     
     # CSV Preparation
-    # Note: We must wrap scalars in lists for the DataFrame
-    csv_dict = {'URL': [st.session_state['url']]}
+    csv_dict = {'URL': [st.session_state.url]}
     for k, v in data.items():
         if k != 'Image URLs':
             csv_dict[k] = [v]
     
-    # Add Image columns (up to 10)
     for i, img_url in enumerate(data['Image URLs'][:10], 1):
         csv_dict[f'Image {i}'] = [img_url]
 
     df_csv = pd.DataFrame(csv_dict)
     csv = df_csv.to_csv(index=False).encode('utf-8')
 
-    # This button will NOT cause the data to disappear because we use Session State
     st.download_button(
         label="📥 Download Data as CSV",
         data=csv,
@@ -233,7 +237,6 @@ if 'product_data' in st.session_state:
         mime="text/csv"
     )
 
-    # Optional: Clear results button
     if st.button("Clear Results"):
         del st.session_state['product_data']
         st.rerun()
