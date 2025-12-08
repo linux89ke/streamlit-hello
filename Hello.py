@@ -3,11 +3,19 @@ import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 import re
+import time
 
 st.set_page_config(page_title="Jumia Product Scraper", page_icon="🛒", layout="wide")
 
 st.title("🛒 Jumia Product Information Scraper")
 st.markdown("Enter a Jumia product URL to extract product details")
+
+# Add option to use different methods
+scraping_method = st.radio(
+    "Select scraping method:",
+    ["Standard (Fast)", "Alternative (Slower but more reliable)"],
+    help="If Standard method fails with 403 error, try Alternative method"
+)
 
 # Input field for URL
 url = st.text_input("Enter Jumia Product URL:", placeholder="https://www.jumia.co.ke/...")
@@ -20,12 +28,52 @@ if st.button("Fetch Product Data", type="primary"):
     else:
         with st.spinner("Fetching product data..."):
             try:
-                # Fetch the webpage
-                headers = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                }
-                response = requests.get(url, headers=headers, timeout=10)
-                response.raise_for_status()
+                # Different headers and session setup based on method
+                if scraping_method == "Standard (Fast)":
+                    headers = {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                        'Accept-Encoding': 'gzip, deflate, br',
+                        'DNT': '1',
+                        'Connection': 'keep-alive',
+                        'Upgrade-Insecure-Requests': '1',
+                        'Sec-Fetch-Dest': 'document',
+                        'Sec-Fetch-Mode': 'navigate',
+                        'Sec-Fetch-Site': 'none',
+                        'Cache-Control': 'max-age=0',
+                    }
+                    
+                    session = requests.Session()
+                    response = session.get(url, headers=headers, timeout=15)
+                    response.raise_for_status()
+                else:
+                    # Alternative method with retry and delay
+                    headers = {
+                        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                        'Accept-Language': 'en-US,en;q=0.5',
+                        'Accept-Encoding': 'gzip, deflate, br',
+                        'Connection': 'keep-alive',
+                        'Upgrade-Insecure-Requests': '1',
+                        'Sec-Fetch-Dest': 'document',
+                        'Sec-Fetch-Mode': 'navigate',
+                        'Sec-Fetch-Site': 'none',
+                        'Sec-Fetch-User': '?1',
+                        'Pragma': 'no-cache',
+                        'Cache-Control': 'no-cache',
+                        'Referer': 'https://www.jumia.co.ke/',
+                    }
+                    
+                    session = requests.Session()
+                    
+                    # First visit homepage to get cookies
+                    session.get('https://www.jumia.co.ke/', headers=headers, timeout=10)
+                    time.sleep(2)
+                    
+                    # Then fetch the product page
+                    response = session.get(url, headers=headers, timeout=15)
+                    response.raise_for_status()
                 
                 # Parse HTML
                 soup = BeautifulSoup(response.content, 'html.parser')
