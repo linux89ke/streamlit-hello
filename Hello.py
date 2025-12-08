@@ -102,8 +102,7 @@ if st.button("Fetch Product Data", type="primary"):
                 
                 # 2. Brand
                 brand_text = "N/A"
-                # Target brand link (often near a "Brand:" label, using common Jumia structure)
-                brand_container = soup.find('div', class_='-fs16') # General container for metadata
+                brand_container = soup.find('div', class_='-fs16')
                 if brand_container and 'Brand:' in brand_container.text:
                     brand_link = brand_container.find('a')
                     if brand_link:
@@ -112,15 +111,17 @@ if st.button("Fetch Product Data", type="primary"):
                 product_data['Brand'] = brand_text
                 
                 # 3. Seller Name
-                seller_name = "N/A"
-                # Target seller link (often href contains /seller/ or has a specific wrapper)
+                seller_name = "N/A" # Initialize
                 seller_link = soup.find('a', href=re.compile(r'/seller/'))
                 if seller_link:
                     seller_name = seller_link.text.strip()
                 
-                # 4. SKU and 5. Model/Config - Get detailed info
+                # *** FIX: Assign the value regardless of whether the link was found ***
+                product_data['Seller Name'] = seller_name
                 
-                # SKU: Search page text for formal Jumia SKU (e.g., VI505EA5OP0J4NAFAMZGTIN)
+                # 4. SKU and 5. Model/Config
+                
+                # SKU: Search page text for formal Jumia SKU
                 sku_match = re.search(r'SKU:\s*([A-Z0-9]+)', all_text, re.I)
                 if sku_match:
                     product_data['SKU'] = sku_match.group(1).strip()
@@ -132,10 +133,8 @@ if st.button("Fetch Product Data", type="primary"):
                 config = "N/A"
                 model_match = re.search(r'Model:\s*([A-Z0-9\-\/]+)', all_text, re.I)
                 if model_match:
-                    # Group 1 captures the model number, stopping before next word or space
                     config = model_match.group(1).strip()
                 elif product_name:
-                    # Try to find a code that looks like a model number in the title
                     model_in_title = re.search(r'([A-Z]{3,}\d{3,}[A-Z0-9]*)', product_name)
                     if model_in_title:
                         config = model_in_title.group(1)
@@ -144,29 +143,23 @@ if st.button("Fetch Product Data", type="primary"):
                 
                 # 6. Category - Parse breadcrumb navigation
                 categories = []
-                # Jumia breadcrumb links typically use class '_aj'
                 nav_elements = soup.find_all('a', class_='_aj') 
                 
                 for link in nav_elements:
                     text = link.text.strip()
-                    # Filter out 'Home', 'Jumia', and the product name itself
                     if text and text.lower() not in ['home', 'jumia'] and text != product_data['Product Name']:
                         categories.append(text)
                 
-                # Remove duplicates while preserving order
                 unique_cats = list(dict.fromkeys(categories))
                 product_data['Category'] = " > ".join(unique_cats) if unique_cats else "N/A"
                 
                 # 7. Image URLs
                 images = []
-                # Find the main image and gallery thumbnails
                 img_elements = soup.find_all('img', src=re.compile(r'jumia\.is/product/'))
                 
                 for img in img_elements:
-                    # Look for data-src first (high-res), then src
                     img_url = img.get('data-src') or img.get('src')
                     if img_url and 'jumia.is' in img_url:
-                        # Ensure the URL is absolute
                         if img_url.startswith('//'): 
                             img_url = 'https:' + img_url
                         if img_url not in images:
@@ -181,7 +174,7 @@ if st.button("Fetch Product Data", type="primary"):
                 # --- DISPLAY RESULTS ---
                 st.success("✅ Product data fetched successfully!")
                 
-                # Prepare data for display table based on user request order
+                # Prepare data for display table
                 display_data = {
                     'Product Name': product_data['Product Name'],
                     'Brand': product_data['Brand'],
