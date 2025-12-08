@@ -13,7 +13,7 @@ import time
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Jumia Product Scraper", page_icon="🛒", layout="wide")
 
-st.title("🛒 Jumia Product Information Scraper (V5.0 - Final)")
+st.title("🛒 Jumia Product Information Scraper (Final - Model Removed)")
 st.markdown("Enter a Jumia product URL below to extract details, images, and prices.")
 
 # --- SIDEBAR: SETUP INSTRUCTIONS ---
@@ -62,9 +62,9 @@ def get_driver():
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
     return driver
 
-# --- 2. SCRAPING FUNCTION (V5.0 FINAL) ---
+# --- 2. SCRAPING FUNCTION (Model/Config Removed) ---
 def scrape_jumia(url):
-    """Scrapes data with maximum robustness for Seller and Category (v5.0)."""
+    """Scrapes data with maximum robustness, excluding Model/Config."""
     driver = get_driver()
     if not driver:
         return None
@@ -98,7 +98,7 @@ def scrape_jumia(url):
              data['Brand'] = data['Product Name'].split()[0]
 
 
-        # 3. Seller Name (V5.0 FIX: Multiple Fallbacks)
+        # 3. Seller Name 
         data['Seller Name'] = "N/A"
         
         # Strategy A: Find the link near "Seller Information" (Primary)
@@ -109,7 +109,6 @@ def scrape_jumia(url):
                 all_links = container.find_all('a', href=True)
                 for link in all_links:
                     text = link.text.strip()
-                    # Filter out common button/label text
                     if text and text not in ['Details', 'Follow', 'Visit Store', 'Official Store'] and ('/seller/' in link.get('href') or '/sp-' in link.get('href')):
                         data['Seller Name'] = text
                         break
@@ -122,22 +121,19 @@ def scrape_jumia(url):
                  if seller_text not in ['Details', 'Follow', 'Visit Store']:
                     data['Seller Name'] = seller_text
                  else:
-                    # If it's a button, try to find the actual seller name near the button
                     seller_name_near = seller_tag.find_previous_sibling()
                     if seller_name_near and seller_name_near.name in ['span', 'div']:
                         data['Seller Name'] = seller_name_near.text.strip()
 
 
-        # 4. Category (V5.0 FIX: Broadest XPath targeting structure)
+        # 4. Category
         cats = []
         try:
-            # Broadest XPath targeting common list/nav structures near the top
             category_xpath = "//ol//li//a | //nav//li//a | //div[contains(@class, 'br-c')]//a"
             category_links = driver.find_elements(By.XPATH, category_xpath)
             
             for link in category_links:
                 txt = link.text.strip()
-                # Ensure the link is not the product name itself, Home, or Jumia
                 if txt and txt.lower() not in ['home', 'jumia'] and txt != data['Product Name']:
                     cats.append(txt)
         except Exception:
@@ -145,9 +141,8 @@ def scrape_jumia(url):
             
         data['Category'] = " > ".join(list(dict.fromkeys(cats))) if cats else "N/A"
 
-        # 5. SKU & Model (Specifications Section Strategy - Reliable)
+        # 5. SKU (Model/Config Logic Removed)
         data['SKU'] = "N/A"
-        data['Model/Config'] = "N/A"
         
         # Look in spec list items
         specs_list = soup.find_all('li', class_='-pvxs') 
@@ -155,8 +150,6 @@ def scrape_jumia(url):
             text = item.get_text(strip=True)
             if 'SKU' in text:
                 data['SKU'] = text.replace('SKU', '').replace(':', '').strip()
-            elif 'Model' in text:
-                 data['Model/Config'] = text.replace('Model', '').replace(':', '').strip()
         
         # Fallback for SKU (from URL)
         if data['SKU'] == "N/A":
@@ -164,7 +157,7 @@ def scrape_jumia(url):
              if match:
                  data['SKU'] = match.group(1)
 
-        # 6. Images (Confirmed Working)
+        # 6. Images
         imgs = []
         for img in soup.find_all('img'):
             src = img.get('data-src') or img.get('src')
@@ -179,7 +172,6 @@ def scrape_jumia(url):
         st.error(f"Scraping Error: {str(e)}")
         return None
     finally:
-        # Ensures the browser closes cleanly
         if driver:
             try:
                 driver.quit()
@@ -218,6 +210,7 @@ if st.session_state.product_data:
     
     with col1:
         st.subheader("📋 Product Details")
+        # Prepare table data, excluding Image URLs
         display_dict = {k: v for k, v in data.items() if k != 'Image URLs'}
         df_display = pd.DataFrame([{'Attribute': k, 'Value': v} for k, v in display_dict.items()])
         st.table(df_display.set_index('Attribute'))
