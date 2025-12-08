@@ -43,9 +43,8 @@ if st.button("Fetch Product Data", type="primary"):
                 # Setup Chrome options
                 chrome_options = Options()
                 
-                if use_headless:
-                    chrome_options.add_argument("--headless")
-                
+                # Always use headless in cloud environment
+                chrome_options.add_argument("--headless=new")
                 chrome_options.add_argument("--no-sandbox")
                 chrome_options.add_argument("--disable-dev-shm-usage")
                 chrome_options.add_argument("--disable-blink-features=AutomationControlled")
@@ -53,16 +52,37 @@ if st.button("Fetch Product Data", type="primary"):
                 chrome_options.add_experimental_option('useAutomationExtension', False)
                 chrome_options.add_argument("--disable-gpu")
                 chrome_options.add_argument("--window-size=1920,1080")
+                chrome_options.add_argument("--disable-software-rasterizer")
+                chrome_options.add_argument("--disable-extensions")
                 chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
                 
-                # Try to use webdriver-manager
+                # Try different methods to initialize driver
+                driver = None
+                
+                # Method 1: Try webdriver-manager
                 try:
                     from webdriver_manager.chrome import ChromeDriverManager
                     service = Service(ChromeDriverManager().install())
                     driver = webdriver.Chrome(service=service, options=chrome_options)
-                except:
-                    # Fallback to system chromedriver
-                    driver = webdriver.Chrome(options=chrome_options)
+                except Exception as e1:
+                    st.info(f"Method 1 failed: {str(e1)}")
+                    
+                    # Method 2: Try system chromedriver
+                    try:
+                        driver = webdriver.Chrome(options=chrome_options)
+                    except Exception as e2:
+                        st.info(f"Method 2 failed: {str(e2)}")
+                        
+                        # Method 3: Try chromium (for Linux/Streamlit Cloud)
+                        try:
+                            chrome_options.binary_location = "/usr/bin/chromium"
+                            driver = webdriver.Chrome(options=chrome_options)
+                        except Exception as e3:
+                            st.error(f"All methods failed. Last error: {str(e3)}")
+                            raise Exception("Could not initialize Chrome driver")
+                
+                if not driver:
+                    raise Exception("Failed to create driver instance")
                 
                 # Hide webdriver property
                 driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
