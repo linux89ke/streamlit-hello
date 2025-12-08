@@ -13,7 +13,7 @@ import os
 
 st.set_page_config(page_title="Jumia Product Scraper", page_icon="🛒", layout="wide")
 
-st.title("🛒 Jumia Product Information Scraper")
+st.title("🛒 Jumia Product Information Scraper (Robust Version)")
 st.markdown("Enter a Jumia product URL to extract product details.")
 
 # Installation instructions for Streamlit Cloud
@@ -58,12 +58,10 @@ if st.button("Fetch Product Data", type="primary"):
                 
                 # Streamlined Driver Initialization (Prioritizes Streamlit Cloud setup)
                 try:
-                    # Attempt Streamlit Cloud/Linux path setup
                     service = Service(executable_path="/usr/bin/chromedriver")
                     chrome_options.binary_location = "/usr/bin/chromium"
                     driver = webdriver.Chrome(service=service, options=chrome_options)
                 except Exception as e_cloud:
-                    # Fallback for local environments
                     try:
                         driver = webdriver.Chrome(options=chrome_options)
                     except Exception as e_local:
@@ -73,23 +71,18 @@ if st.button("Fetch Product Data", type="primary"):
                 if not driver:
                     raise Exception("Failed to create driver instance")
                 
-                # Hide webdriver property to reduce bot detection risk
                 driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
             
             with st.spinner("Fetching product data..."):
-                # Load the page
                 driver.get(url)
                 
-                # Wait for main product content to load (e.g., the title h1)
                 WebDriverWait(driver, 15).until(
                     EC.presence_of_element_located((By.TAG_NAME, "h1"))
                 )
                 
-                # Scroll down slightly to ensure dynamic content loads
                 driver.execute_script("window.scrollTo(0, 300);")
                 time.sleep(2) 
                 
-                # Get page source and parse
                 soup = BeautifulSoup(driver.page_source, 'html.parser')
                 
                 # --- EXTRACT DATA ---
@@ -97,90 +90,82 @@ if st.button("Fetch Product Data", type="primary"):
                 all_text = soup.get_text()
 
                 # 1. Product Name (from h1)
-                product_name = soup.find('h1')
-                product_data['Product Name'] = product_name.text.strip() if product_name else "N/A"
+                product_name_elem = soup.find('h1')
+                product_name = product_name_elem.text.strip() if product_name_elem else "N/A"
+                product_data['Product Name'] = product_name
                 
-                # 2. Brand
+                # 2. Brand (Using XPath fallback: looking for the link in the element that starts with 'Brand:')
                 brand_text = "N/A"
-                # Primary search: common Jumia structure
-                brand_container = soup.find('div', class_='-fs16')
-                if brand_container and 'Brand:' in brand_container.text:
-                    brand_link = brand_container.find('a')
-                    if brand_link:
-                        brand_text = brand_link.text.strip()
+                try:
+                    brand_elem_xpath = driver.find_element(By.XPATH, "//div[contains(., 'Brand:')]/a")
+                    brand_text = brand_elem_xpath.text.strip()
+                except:
+                    # Fallback to regex in case XPath fails
+                    if product_name != "N/A":
+                        brand_fallback = re.search(r'^([A-Z][a-z]{2,})\s+', product_name)
+                        if brand_fallback:
+                             brand_text = brand_fallback.group(1).strip()
                 
                 product_data['Brand'] = brand_text
                 
-                # 3. Seller Name
+                # 3. Seller Name (Using XPath fallback: looking for link near text 'Seller Score')
                 seller_name = "N/A"
-                # Primary search: Find link associated with seller info
-                seller_link = soup.find('a', href=re.compile(r'/seller/'))
-                if seller_link:
-                    seller_name = seller_link.text.strip()
+                try:
+                    # Look for the link that is a preceding sibling to the Seller Score/Rating box
+                    seller_elem_xpath = driver.find_element(By.XPATH, "//div[contains(., 'Seller Score')]/ancestor::div[1]/preceding-sibling::div[1]/a")
+                    seller_name = seller_elem_xpath.text.strip()
+                except:
+                    # Simpler link search (often used for the seller name link)
+                    seller_link = soup.find('a', href=re.compile(r'/seller/'))
+                    if seller_link:
+                        seller_name = seller_link.text.strip()
                 
-                # Fallback search: Check near "Seller Score"
-                if seller_name == "N/A":
-                    score_element = soup.find('div', text=re.compile(r'Seller Score'))
-                    if score_element and score_element.parent:
-                        # Seller name is often a sibling or grandparent's child
-                        seller_link_fallback = score_element.find_previous('a')
-                        if seller_link_fallback and 'href' in seller_link_fallback.attrs and '/seller/' in seller_link_fallback['href']:
-                             seller_name = seller_link_fallback.text.strip()
-
                 product_data['Seller Name'] = seller_name
                 
-                # 4. SKU and 5. Model/Config
-                
-                # SKU: Search page text for formal Jumia SKU
+                # 4. SKU 
                 sku_match = re.search(r'SKU:\s*([A-Z0-9]+)', all_text, re.I)
                 if sku_match:
                     product_data['SKU'] = sku_match.group(1).strip()
                 else:
-                    # Fallback to product ID from URL
                     product_data['SKU'] = url.split('-')[-1].split('.')[0] if '.' in url.split('-')[-1] else "N/A"
 
-                # Model/Config: Search for "Model:" or infer from title
+                # 5. Model/Config (Strictly from the Product Name, fixing the 'Weight' issue)
                 config = "N/A"
-                # Strict regex to capture the model number and nothing else
-                model_match = re.search(r'(Model|Config):\s*([A-Z0-9\-\/]+)', all_text, re.I)
-                if model_match:
-                    config = model_match.group(2).strip()
-                elif product_name:
-                    # Try to find a code that looks like a model number in the title
-                    model_in_title = re.search(r'([A-Z]{3,}\d{3,}[A-Z0-9]*)', product_name)
-                    if model_in_title:
-                        config = model_in_title.group(1)
-
-                # Final Cleanup Check for Model/Config (Remove trailing non-model words)
-                if config != "N/A":
-                    config = re.sub(r'Weight|Width|Inches|Screen$', '', config).strip()
-
+                # Search for alphanumeric model numbers in the title (e.g., HTC4300QFS)
+                model_in_title = re.search(r'([A-Z]{3,}\d{3,}[A-Z0-9]*)', product_name)
+                if model_in_title:
+                    config = model_in_title.group(1)
+                
                 product_data['Model/Config'] = config
                 
-                # 6. Category - Parse breadcrumb navigation
+                # 6. Category (Using XPath: find all links in the breadcrumb navigation)
                 categories = []
-                # Jumia breadcrumb links typically use class '_aj'
-                nav_elements = soup.find_all('a', class_='_aj') 
-                
-                for link in nav_elements:
-                    text = link.text.strip()
-                    if text and text.lower() not in ['home', 'jumia'] and text != product_data['Product Name']:
-                        categories.append(text)
-                
+                try:
+                    # Find all links within the div containing the breadcrumbs (typically near the top)
+                    category_links = driver.find_elements(By.XPATH, "//div[contains(@class, 'nav') or contains(@class, 'breadcrumb')]//a")
+                    for link in category_links:
+                        text = link.text.strip()
+                        if text and text.lower() not in ['home', 'jumia'] and text != product_data['Product Name']:
+                            categories.append(text)
+                except:
+                    # Fallback to BeautifulSoup if Selenium link finding fails
+                    nav_elements = soup.find_all('a', class_=re.compile(r'_aj|link')) 
+                    for link in nav_elements:
+                        text = link.text.strip()
+                        if text and text.lower() not in ['home', 'jumia'] and text != product_data['Product Name']:
+                            categories.append(text)
+
                 unique_cats = list(dict.fromkeys(categories))
                 product_data['Category'] = " > ".join(unique_cats) if unique_cats else "N/A"
                 
-                # 7. Image URLs
+                # 7. Image URLs (Robust Search)
                 images = []
-                # Try common Jumia image sources
-                img_elements = soup.find_all('img', {'data-src': re.compile(r'jumia\.is/product/')})
-                if not img_elements:
-                    img_elements = soup.find_all('img', {'src': re.compile(r'jumia\.is/product/')})
-
+                # Find all images with the Jumia product domain
+                img_elements = soup.find_all('img', {'data-src': re.compile(r'jumia\.is/product/|jfs')})
+                
                 for img in img_elements:
-                    # Look for data-src first (high-res), then src
                     img_url = img.get('data-src') or img.get('src')
-                    if img_url and 'jumia.is' in img_url:
+                    if img_url and ('jumia.is' in img_url or 'jfs' in img_url):
                         if img_url.startswith('//'): 
                             img_url = 'https:' + img_url
                         if img_url not in images:
@@ -258,14 +243,13 @@ if st.button("Fetch Product Data", type="primary"):
             st.error(f"A critical error occurred: {str(e)}")
             st.exception(e)
             
-            # Troubleshooting tips
             with st.expander("🔧 Troubleshooting"):
                 st.markdown("""
                 **Common issues and solutions:**
                 
-                1. **If deploying to Streamlit Cloud:** Ensure your `packages.txt` and `requirements.txt` files are correct.
-                2. **"Failed to create driver instance" (Local):** Make sure you have Google Chrome installed and that your Selenium version is recent (`pip install --upgrade selenium`).
-                3. **Elements not found:** The website structure may have changed. The scraper logic might need a small update to match new Jumia HTML classes/tags.
+                1. **Selector Failure:** The website structure changed again. If the Brand/Seller/Category still fail, you'll need to manually inspect the current Jumia page and adjust the XPath or CSS selectors.
+                2. **"Failed to create driver instance" (Local):** Ensure Chrome and the correct Chrome driver are installed locally.
+                3. **Cloud Deployment:** Verify `packages.txt` and `requirements.txt`.
                 """)
         
         finally:
