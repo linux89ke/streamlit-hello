@@ -64,95 +64,97 @@ def get_driver():
 
 # --- 2. SCRAPING FUNCTION ---
 def scrape_jumia(url):
-    """Scrapes data from the given Jumia URL."""
+    """Scrapes data using text-based anchoring (v3.0)."""
     driver = get_driver()
     if not driver:
         return None
 
     try:
         driver.get(url)
-        # Wait for the H1 tag to ensure page load
         WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.TAG_NAME, "h1")))
-        
-        # Scroll down to trigger lazy loading of images
         driver.execute_script("window.scrollTo(0, 500);")
         time.sleep(2) 
         
         soup = BeautifulSoup(driver.page_source, 'html.parser')
-        # Get text with separators to avoid merging words
-        all_text = soup.get_text(separator=' ', strip=True) 
-        
         data = {}
 
         # 1. Product Name
         name_tag = soup.find('h1')
         data['Product Name'] = name_tag.text.strip() if name_tag else "N/A"
         
-        # 2. Brand (Robust Fallback)
+        # 2. Brand (Text-Anchor Strategy)
         data['Brand'] = "N/A"
-        # Strategy A: Look for explicit brand link inside common containers
-        brand_node = soup.find('div', class_='-pvxs')
-        if brand_node:
-            brand_link = brand_node.find('a')
-            if brand_link:
-                data['Brand'] = brand_link.text.strip()
+        # Find the div that explicitly contains text "Brand: "
+        brand_label = soup.find(string=re.compile(r"Brand:\s*"))
+        if brand_label:
+            # The brand name is usually in a link or sibling span next to "Brand:"
+            brand_parent = brand_label.find_parent('div')
+            if brand_parent:
+                brand_link = brand_parent.find('a')
+                if brand_link:
+                    data['Brand'] = brand_link.text.strip()
+                else:
+                    # Sometimes it's just text next to the label
+                    data['Brand'] = brand_parent.get_text().replace('Brand:', '').strip()
         
-        # Strategy B: Regex from Title if A fails
         if data['Brand'] == "N/A":
-            match = re.search(r'^([A-Z][a-z0-9]{2,})\s+', data['Product Name'])
-            if match: data['Brand'] = match.group(1).strip()
+             # Fallback: Extract from first word of Product Name
+             data['Brand'] = data['Product Name'].split()[0]
 
-        # 3. Seller Name (Updated for 2024/2025 layout)
+        # 3. Seller Name (Sidebar Strategy)
         data['Seller Name'] = "N/A"
-        try:
-            # Look for the block containing 'Seller Information' or 'Score'
-            seller_block = driver.find_element(By.XPATH, "//div[contains(text(), 'Seller Information') or contains(., 'Seller Score')]")
-            # Find the first link inside this block or immediately preceding it
-            seller_link = seller_block.find_element(By.XPATH, "./preceding::a[contains(@href, '/seller/')][1]")
-            data['Seller Name'] = seller_link.text.strip()
-        except:
-            # Fallback: Just find any link with '/seller/' in href
-            seller_tag = soup.find('a', href=re.compile(r'/seller/'))
-            if seller_tag:
-                data['Seller Name'] = seller_tag.text.strip()
+        # Jumia sidebar usually has a distinct section for "Seller Information"
+        # We look for the "Seller Information" header, then find the next link
+        seller_header = soup.find(string=re.compile(r"Seller Information|Seller details"))
+        if seller_header:
+            # Go up to the container, then find the first link that is NOT "Follow"
+            container = seller_header.find_parent('div').find_parent('div')
+            if container:
+                seller_link = container.find('a', href=True)
+                if seller_link:
+                     data['Seller Name'] = seller_link.text.strip()
 
-        # 4. SKU (Fixed: Removed re.I to stop capturing 'Weight')
-        sku_match = re.search(r'SKU[:\s]*([A-Z0-9]+)', all_text) 
-        if sku_match:
-            data['SKU'] = sku_match.group(1).strip()
-        else:
-            # Fallback to extracting from URL
-            data['SKU'] = url.split('-')[-1].replace('.html', '')
-
-        # 5. Model/Config
-        model_match = re.search(r'\b([A-Z]{2,}\d{3,}[A-Z0-9]*)\b', data['Product Name'])
-        data['Model/Config'] = model_match.group(1) if model_match else "N/A"
-
-        # 6. Category
+        # 4. Category (Breadcrumb Strategy)
         cats = []
-        try:
-            # Jumia breadcrumbs often use <nav> or specific classes
-            breadcrumb_links = soup.select('nav[aria-label="Breadcrumb"] a')
-            if not breadcrumb_links:
-                breadcrumb_links = soup.select('.br-c a') # Alternate class
-            
-            for link in breadcrumb_links:
+        # Look for the breadcrumb container via class (common ones: .br-c, .breadcrumbs)
+        # OR look for the <nav> element
+        breadcrumbs = soup.find('div', class_='br-c') or soup.find('nav', {'aria-label': 'Breadcrumb'})
+        if breadcrumbs:
+            links = breadcrumbs.find_all('a')
+            for link in links:
                 txt = link.text.strip()
-                if txt and txt.lower() not in ['home', 'jumia']:
+                if txt.lower() not in ['home', 'jumia']:
                     cats.append(txt)
-        except: pass
-        data['Category'] = " > ".join(list(dict.fromkeys(cats)))
+        data['Category'] = " > ".join(cats) if cats else "N/A"
 
-        # 7. Images (Broadened Search)
+        # 5. SKU & Model (Specification Section Strategy)
+        # Scroll to specs to ensure they are loaded
+        data['SKU'] = "N/A"
+        data['Model/Config'] = "N/A"
+        
+        # Try to find the "Specifications" list items
+        specs_list = soup.find_all('li', class_='-pvxs') # Common list item class in specs
+        for item in specs_list:
+            text = item.get_text(strip=True)
+            if 'SKU' in text:
+                data['SKU'] = text.replace('SKU', '').replace(':', '').strip()
+            elif 'Model' in text:
+                 data['Model/Config'] = text.replace('Model', '').replace(':', '').strip()
+        
+        # Fallback for SKU if not found in specs (grab from URL or Script tag)
+        if data['SKU'] == "N/A":
+             # Jumia often puts the SKU in the URL after the last dash
+             match = re.search(r'-([A-Z0-9]+)\.html', url)
+             if match:
+                 data['SKU'] = match.group(1)
+
+        # 6. Images
         imgs = []
         for img in soup.find_all('img'):
             src = img.get('data-src') or img.get('src')
-            if src:
+            if src and 'jumia.is' in src and '/product/' in src:
                 if src.startswith('//'): src = 'https:' + src
-                # Filter for jumia product images (exclude tiny icons/trackers)
-                if 'jumia.is' in src and ('/product/' in src or '/unsafe/' in src):
-                    if src not in imgs:
-                        imgs.append(src)
+                if src not in imgs: imgs.append(src)
         data['Image URLs'] = imgs
         
         return data
@@ -162,7 +164,6 @@ def scrape_jumia(url):
         return None
     finally:
         driver.quit()
-
 # --- 3. MAIN UI LOGIC ---
 
 url_input = st.text_input("Enter Jumia Product URL:", placeholder="https://www.jumia.co.ke/...")
