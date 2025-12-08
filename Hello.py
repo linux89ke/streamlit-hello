@@ -1,166 +1,178 @@
 import streamlit as st
+import requests
+from bs4 import BeautifulSoup
 import pandas as pd
-import csv
-import io
-import math
-import zipfile
-import datetime
+import re
 
-# Default country distribution percentages
-default_distribution = {
-    "Nigeria": (43.00, "NG"),
-    "Kenya": (23.00, "KE"),
-    "Uganda": (11.80, "UG"),
-    "Ghana": (12.00, "GH"),
-    "Egypt": (0.00, "EG"),
-    "Morocco": (0.00, "MA"),
-    "Ivory Coast": (6.00, "IC"),
-    "Senegal": (5.00, "SN"),
-}
+st.set_page_config(page_title="Jumia Product Scraper", page_icon="🛒", layout="wide")
 
-def generate_filename(base_name, extension="xlsx"):
-    date_str = datetime.datetime.today().strftime("%d-%m-%Y")
-    return f"{base_name} {date_str}.{extension}"
+st.title("🛒 Jumia Product Information Scraper")
+st.markdown("Enter a Jumia product URL to extract product details")
 
-def save_individual_country_files(df, country_counts):
-    date_str = datetime.datetime.today().strftime("%d-%m-%Y")
-    folder_name = f"PIM QC ALL COUNTRIES {date_str}/"
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-        for country in country_counts[:-1]:  # Skip total row
-            country_code = country["Country Code"]
-            country_name = country["Country"]
-            if not country_code:
-                continue
-            country_df = df[df["Countries"] == country_code]
-            country_file_name = f"{folder_name}PIM QC ALL COUNTRIES {country_code}.xlsx"
-            file_buffer = io.BytesIO()
-            with pd.ExcelWriter(file_buffer, engine="xlsxwriter") as writer:
-                country_df.to_excel(writer, sheet_name="Data", index=False)
-            file_buffer.seek(0)
-            zip_file.writestr(country_file_name, file_buffer.read())
-    zip_buffer.seek(0)
-    return zip_buffer
+# Input field for URL
+url = st.text_input("Enter Jumia Product URL:", placeholder="https://www.jumia.co.ke/...")
 
-def detect_delimiter(file):
-    sample = file.read(2048)
-    file.seek(0)
-    return ';' if b';' in sample else ','
+if st.button("Fetch Product Data", type="primary"):
+    if not url:
+        st.error("Please enter a valid URL")
+    elif "jumia.co.ke" not in url:
+        st.error("Please enter a valid Jumia Kenya URL")
+    else:
+        with st.spinner("Fetching product data..."):
+            try:
+                # Fetch the webpage
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }
+                response = requests.get(url, headers=headers, timeout=10)
+                response.raise_for_status()
+                
+                # Parse HTML
+                soup = BeautifulSoup(response.content, 'html.parser')
+                
+                # Extract data
+                product_data = {}
+                
+                # Product Name (from title or h1)
+                product_name = soup.find('h1')
+                product_data['Product Name'] = product_name.text.strip() if product_name else "N/A"
+                
+                # Brand (from breadcrumb or specific element)
+                brand_elem = soup.find('a', {'class': re.compile('breadcrumb|brand', re.I)})
+                if not brand_elem:
+                    # Try to extract from product name or page
+                    brand_search = soup.find_all('a', href=re.compile(r'/[^/]+/$'))
+                    for elem in brand_search:
+                        if 'brand' in elem.get('class', []) or '/brand/' in elem.get('href', ''):
+                            brand_elem = elem
+                            break
+                
+                # Alternative: look for "Brand:" label
+                if not brand_elem:
+                    brand_label = soup.find(text=re.compile(r'Brand:', re.I))
+                    if brand_label:
+                        brand_elem = brand_label.find_next('a')
+                
+                product_data['Brand'] = brand_elem.text.strip() if brand_elem else "N/A"
+                
+                # SKU
+                sku_elem = soup.find(text=re.compile(r'SKU:', re.I))
+                if sku_elem:
+                    sku_text = sku_elem.find_next().text.strip()
+                    product_data['SKU'] = sku_text
+                else:
+                    product_data['SKU'] = "N/A"
+                
+                # Model/Config
+                model_elem = soup.find(text=re.compile(r'Model:', re.I))
+                if model_elem:
+                    model_text = model_elem.find_next().text.strip()
+                    product_data['Model/Config'] = model_text
+                else:
+                    product_data['Model/Config'] = "N/A"
+                
+                # Category (from breadcrumbs)
+                breadcrumbs = soup.find_all('a', {'class': re.compile('breadcrumb', re.I)})
+                if breadcrumbs:
+                    categories = [b.text.strip() for b in breadcrumbs if b.text.strip()]
+                    product_data['Category'] = " > ".join(categories)
+                else:
+                    product_data['Category'] = "N/A"
+                
+                # Seller Name
+                seller_elem = soup.find('a', href=re.compile(r'/[^/]+-store/'))
+                if not seller_elem:
+                    seller_elem = soup.find(text=re.compile(r'Seller|Store', re.I))
+                    if seller_elem:
+                        seller_elem = seller_elem.find_next('a')
+                
+                product_data['Seller Name'] = seller_elem.text.strip() if seller_elem else "N/A"
+                
+                # Image URLs
+                images = []
+                img_elements = soup.find_all('img', {'src': re.compile(r'jumia\.is.*product')})
+                
+                for img in img_elements:
+                    img_url = img.get('src') or img.get('data-src')
+                    if img_url and 'product' in img_url:
+                        # Convert to high quality URL
+                        if 'fit-in' in img_url:
+                            images.append(img_url)
+                        elif img_url.startswith('//'):
+                            images.append('https:' + img_url)
+                        elif not img_url.startswith('http'):
+                            images.append('https://ke.jumia.is' + img_url)
+                        else:
+                            images.append(img_url)
+                
+                # Remove duplicates while preserving order
+                images = list(dict.fromkeys(images))
+                product_data['Image URLs'] = images
+                
+                # Display results
+                st.success("✅ Product data fetched successfully!")
+                
+                # Create two columns
+                col1, col2 = st.columns([1, 1])
+                
+                with col1:
+                    st.subheader("📋 Product Details")
+                    st.write(f"**Product Name:** {product_data['Product Name']}")
+                    st.write(f"**Brand:** {product_data['Brand']}")
+                    st.write(f"**SKU:** {product_data['SKU']}")
+                    st.write(f"**Model/Config:** {product_data['Model/Config']}")
+                    st.write(f"**Category:** {product_data['Category']}")
+                    st.write(f"**Seller Name:** {product_data['Seller Name']}")
+                
+                with col2:
+                    st.subheader("🖼️ Product Images")
+                    if images:
+                        st.write(f"Found {len(images)} images")
+                        # Display first image as preview
+                        st.image(images[0], caption="Main Product Image", use_column_width=True)
+                    else:
+                        st.warning("No images found")
+                
+                # Display all image URLs
+                if images:
+                    st.subheader("📷 All Image URLs")
+                    for i, img_url in enumerate(images, 1):
+                        st.code(img_url, language=None)
+                
+                # Create downloadable CSV
+                st.subheader("💾 Download Data")
+                
+                # Prepare data for CSV
+                csv_data = {
+                    'Seller Name': [product_data['Seller Name']],
+                    'SKU': [product_data['SKU']],
+                    'Product Name': [product_data['Product Name']],
+                    'Brand': [product_data['Brand']],
+                    'Category': [product_data['Category']],
+                    'Model/Config': [product_data['Model/Config']],
+                    'Image URL 1': [images[0] if len(images) > 0 else ''],
+                    'Image URL 2': [images[1] if len(images) > 1 else ''],
+                    'Image URL 3': [images[2] if len(images) > 2 else ''],
+                    'Image URL 4': [images[3] if len(images) > 3 else ''],
+                    'Image URL 5': [images[4] if len(images) > 4 else ''],
+                }
+                
+                df = pd.DataFrame(csv_data)
+                csv = df.to_csv(index=False)
+                
+                st.download_button(
+                    label="📥 Download as CSV",
+                    data=csv,
+                    file_name=f"product_{product_data['SKU']}.csv",
+                    mime="text/csv"
+                )
+                
+            except requests.exceptions.RequestException as e:
+                st.error(f"Error fetching URL: {str(e)}")
+            except Exception as e:
+                st.error(f"Error parsing product data: {str(e)}")
+                st.exception(e)
 
-def repair_csv(file, delimiter):
-    cleaned_data = []
-    header = None
-    expected_columns = None
-    row_count = 0
-
-    file.seek(0)
-    text_data = file.read().decode("utf-8").splitlines()
-    reader = csv.reader(text_data, delimiter=delimiter)
-
-    for i, row in enumerate(reader):
-        if i == 0:
-            header = row
-            expected_columns = len(header)
-            cleaned_data.append(row)
-        else:
-            row_count += 1
-            if len(row) == expected_columns:
-                cleaned_data.append(row)
-            elif len(row) > expected_columns:
-                row = row[:expected_columns - 1] + [" ".join(row[expected_columns - 1:])]
-                cleaned_data.append(row)
-            elif len(row) < expected_columns:
-                row.extend([""] * (expected_columns - len(row)))
-                cleaned_data.append(row)
-
-    return pd.DataFrame(cleaned_data[1:], columns=cleaned_data[0]), row_count
-
-def distribute_countries(df, selected_countries):
-    total_rows = len(df)
-    active_distribution = {k: v for k, v in default_distribution.items() if k in selected_countries}
-    total_percentage = sum(v[0] for v in active_distribution.values())
-    adjusted_distribution = {k: (v[0] / total_percentage, v[1]) for k, v in active_distribution.items()}
-    country_rows = {k: math.floor(v[0] * total_rows) for k, v in adjusted_distribution.items()}
-    assigned_rows = sum(country_rows.values())
-    remaining_rows = total_rows - assigned_rows
-    sorted_countries = sorted(active_distribution.keys(), key=lambda c: -adjusted_distribution[c][0])
-    for i in range(remaining_rows):
-        country_rows[sorted_countries[i % len(sorted_countries)]] += 1
-    df_list = []
-    country_counts = []
-    start_idx = 0
-    for country, code in [(k, adjusted_distribution[k][1]) for k in sorted_countries]:
-        count = country_rows[country]
-        if count > 0:
-            df_subset = df.iloc[start_idx:start_idx + count].copy()
-            df_subset["Countries"] = code
-            df_list.append(df_subset)
-            start_idx += count
-            country_counts.append({"Country": country, "Country Code": code, "Assigned Rows": count})
-    country_counts.append({"Country": "**Total**", "Country Code": "", "Assigned Rows": total_rows})
-    return pd.concat(df_list, ignore_index=True), country_counts
-
-def merge_csv_files(files, selected_countries):
-    dataframes = []
-    file_stats = []
-    total_rows = 0
-    for file in files:
-        delimiter = detect_delimiter(file)
-        try:
-            df, row_count = repair_csv(file, delimiter)
-            dataframes.append(df)
-            file_stats.append({"Filename": file.name, "Rows (Excluding Header)": row_count})
-            total_rows += row_count
-        except Exception as e:
-            st.error(f"⚠️ Error processing {file.name}: {e}")
-    if dataframes:
-        merged_df = pd.concat(dataframes, ignore_index=True)
-        if 'CATEGORY' in merged_df.columns:
-            merged_df = merged_df.sort_values(by='CATEGORY', ascending=True)
-        merged_df, country_counts = distribute_countries(merged_df, selected_countries)
-        file_stats.append({"Filename": "**Total**", "Rows (Excluding Header)": total_rows})
-        return merged_df, file_stats, country_counts
-    return None, file_stats, []
-
-# Streamlit UI
-st.title("📊 PIM QC Data Processor")
-
-selected_countries = st.multiselect(
-    "Select countries for distribution:",
-    options=list(default_distribution.keys()),
-    default=[c for c, v in default_distribution.items() if v[0] > 0]
-)
-
-uploaded_files = st.file_uploader("Upload CSV files", type=["csv"], accept_multiple_files=True)
-
-if uploaded_files:
-    merged_df, file_stats, country_counts = merge_csv_files(uploaded_files, selected_countries)
-
-    if merged_df is not None:
-        output_excel = io.BytesIO()
-        final_filename = generate_filename("PIM QC ALL COUNTRIES")
-        
-        with pd.ExcelWriter(output_excel, engine="xlsxwriter") as writer:
-            merged_df.to_excel(writer, sheet_name="Merged Data", index=False)
-        output_excel.seek(0)
-
-        st.write("### File Statistics")
-        st.table(file_stats)
-
-        st.write("### Country Distribution")
-        st.table(country_counts)
-
-        st.download_button(
-            label="📥 Download Merged Excel",
-            data=output_excel,
-            file_name=final_filename,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-
-        zip_file_buffer = save_individual_country_files(merged_df, country_counts)
-        st.download_button(
-            label="📥 Download All Country Files (ZIP)",
-            data=zip_file_buffer,
-            file_name=generate_filename("PIM QC ALL COUNTRIES", "zip"),
-            mime="application/zip"
-        )
+# Add footer
+st.markdown("---")
+st.markdown("Built with Streamlit | Scrapes Jumia Kenya product information")
