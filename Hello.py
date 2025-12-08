@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import re
 import time
+import os
 
 st.set_page_config(page_title="Jumia Product Scraper", page_icon="🛒", layout="wide")
 
@@ -16,20 +17,15 @@ st.title("🛒 Jumia Product Information Scraper")
 st.markdown("Enter a Jumia product URL to extract product details")
 
 # Installation instructions
-with st.expander("📦 Installation Instructions"):
+with st.expander("📦 Streamlit Cloud Setup (packages.txt/requirements.txt)"):
     st.code("""
-# Install required packages:
-pip install streamlit selenium beautifulsoup4 pandas webdriver-manager
-
-# For Streamlit Cloud, create these files:
 # requirements.txt:
 streamlit
 selenium
 beautifulsoup4
 pandas
-webdriver-manager
 
-# packages.txt:
+# packages.txt: (for Streamlit Cloud on Linux)
 chromium
 chromium-driver
     """, language="bash")
@@ -49,7 +45,7 @@ if st.button("Fetch Product Data", type="primary"):
                 # Setup Chrome options
                 chrome_options = Options()
                 
-                # Always use headless in cloud environment
+                # Essential options for headless execution/Cloud deployment
                 chrome_options.add_argument("--headless=new")
                 chrome_options.add_argument("--no-sandbox")
                 chrome_options.add_argument("--disable-dev-shm-usage")
@@ -58,34 +54,23 @@ if st.button("Fetch Product Data", type="primary"):
                 chrome_options.add_experimental_option('useAutomationExtension', False)
                 chrome_options.add_argument("--disable-gpu")
                 chrome_options.add_argument("--window-size=1920,1080")
-                chrome_options.add_argument("--disable-software-rasterizer")
-                chrome_options.add_argument("--disable-extensions")
                 chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
                 
-                # Try different methods to initialize driver
-                driver = None
-                
-                # Method 1: Try webdriver-manager
+                # Streamlined Driver Initialization
                 try:
-                    from webdriver_manager.chrome import ChromeDriverManager
-                    service = Service(ChromeDriverManager().install())
+                    # Attempt Streamlit Cloud/Linux path setup
+                    service = Service(executable_path="/usr/bin/chromedriver")
+                    chrome_options.binary_location = "/usr/bin/chromium"
                     driver = webdriver.Chrome(service=service, options=chrome_options)
-                except Exception as e1:
-                    st.info(f"Method 1 failed: {str(e1)}")
-                    
-                    # Method 2: Try system chromedriver
+                    st.info("Using Streamlit Cloud/Linux configuration.")
+                except:
+                    # Fallback for local environments (requires local setup)
                     try:
                         driver = webdriver.Chrome(options=chrome_options)
-                    except Exception as e2:
-                        st.info(f"Method 2 failed: {str(e2)}")
-                        
-                        # Method 3: Try chromium (for Linux/Streamlit Cloud)
-                        try:
-                            chrome_options.binary_location = "/usr/bin/chromium"
-                            driver = webdriver.Chrome(options=chrome_options)
-                        except Exception as e3:
-                            st.error(f"All methods failed. Last error: {str(e3)}")
-                            raise Exception("Could not initialize Chrome driver")
+                        st.info("Using local Chrome configuration.")
+                    except Exception as e_local:
+                        st.error(f"Could not initialize Chrome driver. Local Error: {str(e_local)}")
+                        raise Exception("Failed to create driver instance.")
                 
                 if not driver:
                     raise Exception("Failed to create driver instance")
@@ -97,158 +82,108 @@ if st.button("Fetch Product Data", type="primary"):
                 # Load the page
                 driver.get(url)
                 
-                # Wait for page to load
-                time.sleep(3)
-                
-                # Wait for main content
+                # Wait for main product content to load (e.g., the title h1)
                 try:
-                    WebDriverWait(driver, 10).until(
+                    WebDriverWait(driver, 15).until(
                         EC.presence_of_element_located((By.TAG_NAME, "h1"))
                     )
                 except:
-                    pass
+                    st.warning("Page loading timeout. Continuing with available content.")
+                
+                # Scroll down slightly to ensure dynamic content loads (like seller info)
+                driver.execute_script("window.scrollTo(0, 300);")
+                time.sleep(2) 
                 
                 # Get page source and parse
                 soup = BeautifulSoup(driver.page_source, 'html.parser')
                 
-                # Extract data
+                # --- EXTRACT DATA ---
                 product_data = {}
-                
-                # Product Name (from h1)
+                all_text = soup.get_text()
+
+                # 1. Product Name (from h1)
                 product_name = soup.find('h1')
                 product_data['Product Name'] = product_name.text.strip() if product_name else "N/A"
                 
-                # Brand - Look in the breadcrumb or "Similar products from" section
-                brand_elem = None
-                similar_text = soup.find(text=re.compile(r'Similar products from', re.I))
-                if similar_text:
-                    brand_link = similar_text.find_next('a')
-                    if brand_link:
-                        brand_elem = brand_link
+                # 2. Brand
+                brand_text = "N/A"
+                # Look for the brand link associated with the label
+                brand_link_elem = soup.find('a', href=re.compile(r'/catalog/\?q='))
+                if brand_link_elem:
+                    # Brand is often the first part of the link text or the link itself
+                    brand_text = brand_link_elem.text.strip()
+                elif 'Brand:' in all_text:
+                    # Fallback to regex search
+                    match = re.search(r'Brand:\s*([A-Za-z0-9\s]+?)(?:\||\n)', all_text, re.I | re.DOTALL)
+                    if match:
+                        brand_text = match.group(1).strip()
                 
-                # Method 2: Look in specifications section
-                if not brand_elem:
-                    spec_list = soup.find_all(['li', 'tr', 'div'])
-                    for item in spec_list:
-                        if 'Brand:' in item.text or 'brand:' in item.text.lower():
-                            text = item.text
-                            if 'Brand:' in text:
-                                brand_text = text.split('Brand:')[1].strip().split('\n')[0].strip()
-                                if brand_text:
-                                    product_data['Brand'] = brand_text
-                                    break
+                product_data['Brand'] = brand_text
                 
-                if not product_data.get('Brand') and brand_elem:
-                    product_data['Brand'] = brand_elem.text.strip()
-                elif not product_data.get('Brand'):
-                    product_data['Brand'] = "N/A"
+                # 3. Seller Name
+                seller_name = "N/A"
+                # The seller name is often wrapped in a tag near "Seller Score"
+                seller_elem = soup.find('a', href=re.compile(r'/seller/'))
+                if seller_elem:
+                    seller_name = seller_elem.text.strip()
+                elif 'Seller Score' in all_text:
+                    # Fallback: search text near the score
+                    match = re.search(r'([A-Z0-9\s]+)\s*\d+%', all_text)
+                    if match:
+                        seller_name = match.group(1).strip()
                 
-                # SKU - Look in specifications
-                sku_found = False
-                all_text = soup.get_text()
+                product_data['Seller Name'] = seller_name
+                
+                # 4. SKU and 5. Model/Config - Search through text and URL
+                
+                # SKU: Try to extract from URL if not found in page text (Jumia often uses the product ID as the SKU)
+                product_data['SKU'] = url.split('-')[-1].split('.')[0] if '.' in url.split('-')[-1] else "N/A"
+                
+                # Check page text for a formal SKU
                 sku_match = re.search(r'SKU:\s*([A-Z0-9]+)', all_text, re.I)
                 if sku_match:
                     product_data['SKU'] = sku_match.group(1).strip()
-                    sku_found = True
-                
-                if not sku_found:
-                    list_items = soup.find_all(['li', 'div', 'span'])
-                    for item in list_items:
-                        item_text = item.get_text()
-                        if 'SKU:' in item_text:
-                            sku = item_text.split('SKU:')[1].strip().split()[0]
-                            product_data['SKU'] = sku
-                            sku_found = True
-                            break
-                
-                if not sku_found:
-                    product_data['SKU'] = "N/A"
-                
-                # Model/Config - Look in specifications
-                model_found = False
-                model_match = re.search(r'Model:\s*([A-Z0-9]+)', all_text, re.I)
+
+                # Model/Config: Often present in the h1 text itself or specifications
+                model_match = re.search(r'Model:\s*([A-Z0-9\-\/]+)', all_text, re.I)
+                # If not found, try to infer from product name (e.g., HTC4300QFS)
+                config = "N/A"
                 if model_match:
-                    product_data['Model/Config'] = model_match.group(1).strip()
-                    model_found = True
+                    config = model_match.group(1).strip()
+                elif product_name and product_data['Brand'] != "N/A":
+                    # Try to find a code that looks like a model number in the title
+                    title_parts = product_data['Product Name'].replace(product_data['Brand'], '').strip().split()
+                    potential_model = [p for p in title_parts if re.search(r'[A-Z0-9]{5,}', p)]
+                    if potential_model:
+                        config = potential_model[0]
                 
-                if not model_found:
-                    list_items = soup.find_all(['li', 'div', 'span'])
-                    for item in list_items:
-                        item_text = item.get_text()
-                        if 'Model:' in item_text:
-                            model = item_text.split('Model:')[1].strip().split()[0]
-                            product_data['Model/Config'] = model
-                            model_found = True
-                            break
+                product_data['Model/Config'] = config
                 
-                if not model_found:
-                    product_data['Model/Config'] = "N/A"
-                
-                # Category - Parse breadcrumb navigation properly
+                # 6. Category - Parse breadcrumb navigation
                 categories = []
-                nav_elements = soup.find_all('a', href=True)
+                # Jumia breadcrumb links use class '_aj'
+                nav_elements = soup.find_all('a', class_='_aj') 
                 
                 for link in nav_elements:
-                    href = link.get('href', '')
                     text = link.text.strip()
-                    
-                    if text and href.startswith('/') and not href.endswith('.html'):
-                        category_keywords = ['/electronics/', '/phones-tablets/', '/televisions/', 
-                                           '/computing/', '/home-office/', '/fashion/',
-                                           '/smart-tvs', '/category-']
-                        if any(cat in href for cat in category_keywords):
-                            if text not in categories and text.lower() not in ['home', 'shop', 'all']:
-                                categories.append(text)
+                    # Filter out 'Home' and the last element if it matches the product name
+                    if text and text.lower() not in ['home', 'jumia'] and text not in product_data['Product Name']:
+                        categories.append(text)
                 
-                # Remove duplicates
-                seen = set()
-                unique_cats = []
-                for cat in categories:
-                    cat_lower = cat.lower()
-                    if cat_lower not in seen:
-                        seen.add(cat_lower)
-                        unique_cats.append(cat)
+                # Remove duplicates while preserving order
+                unique_cats = list(dict.fromkeys(categories))
+                product_data['Category'] = " > ".join(unique_cats) if unique_cats else "N/A"
                 
-                product_data['Category'] = " > ".join(unique_cats[:6]) if unique_cats else "N/A"
-                
-                # Seller Name - Look for seller information section
-                seller_found = False
-                
-                # Method 1: Look for links with seller/store keywords
-                seller_links = soup.find_all('a', href=True)
-                for link in seller_links:
-                    href = link.get('href', '')
-                    seller_keywords = ['-store/', 'seller', '/shop']
-                    if any(keyword in href.lower() for keyword in seller_keywords):
-                        seller_name = link.text.strip()
-                        excluded_names = ['home', 'shop', 'sell on jumia', 'help', 'contact']
-                        if seller_name and len(seller_name) < 50 and seller_name.lower() not in excluded_names:
-                            product_data['Seller Name'] = seller_name
-                            seller_found = True
-                            break
-                
-                # Method 2: Search for "Seller Information" section
-                if not seller_found:
-                    seller_heading = soup.find(text=re.compile(r'Seller Information|Sold by', re.I))
-                    if seller_heading:
-                        seller_section = seller_heading.find_next(['a', 'div', 'span'])
-                        if seller_section:
-                            seller_name = seller_section.text.strip()
-                            if seller_name:
-                                product_data['Seller Name'] = seller_name
-                                seller_found = True
-                
-                if not seller_found:
-                    product_data['Seller Name'] = "N/A"
-                
-                # Image URLs
+                # 7. Image URLs
                 images = []
-                img_elements = soup.find_all('img', src=True)
+                # Find the main image using common Jumia image attributes
+                img_elements = soup.find_all('img', src=re.compile(r'jumia\.is/product/'))
                 
                 for img in img_elements:
-                    img_url = img.get('src') or img.get('data-src')
-                    if img_url and 'product' in img_url and 'jumia.is' in img_url:
-                        if img_url.startswith('//'):
+                    img_url = img.get('data-src') or img.get('src')
+                    if img_url and 'jumia.is' in img_url:
+                        # Ensure the URL is absolute
+                        if img_url.startswith('//'): 
                             img_url = 'https:' + img_url
                         if img_url not in images:
                             images.append(img_url)
@@ -259,68 +194,73 @@ if st.button("Fetch Product Data", type="primary"):
                 driver.quit()
                 driver = None
                 
-                # Display results
+                # --- DISPLAY RESULTS ---
                 st.success("✅ Product data fetched successfully!")
+                
+                # Filter data for display table based on user request
+                display_data = {
+                    'Product Name': product_data['Product Name'],
+                    'Brand': product_data['Brand'],
+                    'Category': product_data['Category'],
+                    'Seller Name': product_data['Seller Name'],
+                    'SKU': product_data['SKU'],
+                    'Model/Config': product_data['Model/Config'],
+                }
                 
                 # Create two columns
                 col1, col2 = st.columns([1, 1])
                 
                 with col1:
-                    st.subheader("📋 Product Details")
-                    st.write(f"**Product Name:** {product_data['Product Name']}")
-                    st.write(f"**Brand:** {product_data['Brand']}")
-                    st.write(f"**SKU:** {product_data['SKU']}")
-                    st.write(f"**Model/Config:** {product_data['Model/Config']}")
-                    st.write(f"**Category:** {product_data['Category']}")
-                    st.write(f"**Seller Name:** {product_data['Seller Name']}")
-                
+                    st.subheader("📋 Requested Product Details")
+                    
+                    # Convert dict to DataFrame for clean display
+                    display_df = pd.DataFrame([{'Key': k, 'Value': v} for k, v in display_data.items()])
+                    st.table(display_df.set_index('Key'))
+
                 with col2:
                     st.subheader("🖼️ Product Images")
-                    if images:
-                        st.write(f"Found {len(images)} images")
+                    if product_data['Image URLs']:
+                        images = product_data['Image URLs']
+                        st.write(f"Found **{len(images)}** images.")
+                        
                         # Display first image as preview
                         try:
-                            st.image(images[0], caption="Main Product Image", use_column_width=True)
+                            st.image(images[0], caption="Main Product Image Preview", use_column_width=True)
                         except:
                             st.warning("Could not display image preview")
                     else:
-                        st.warning("No images found")
+                        st.warning("No images found.")
                 
                 # Display all image URLs
-                if images:
+                if product_data['Image URLs']:
                     st.subheader("📷 All Image URLs")
-                    for i, img_url in enumerate(images, 1):
-                        st.code(img_url, language=None)
+                    image_urls_markdown = "\n".join([f"- **Image {i+1}:** `{url}`" for i, url in enumerate(product_data['Image URLs'])])
+                    st.markdown(image_urls_markdown)
                 
                 # Create downloadable CSV
                 st.subheader("💾 Download Data")
                 
-                # Prepare data for CSV
                 csv_data = {
-                    'Seller Name': [product_data['Seller Name']],
-                    'SKU': [product_data['SKU']],
-                    'Product Name': [product_data['Product Name']],
-                    'Brand': [product_data['Brand']],
-                    'Category': [product_data['Category']],
-                    'Model/Config': [product_data['Model/Config']],
+                    'URL': [url],
+                    **display_data
                 }
                 
-                # Add image URLs
-                for i, img_url in enumerate(images[:10], 1):
+                # Add image URLs to CSV data
+                for i, img_url in enumerate(product_data['Image URLs'][:10], 1):
                     csv_data[f'Image URL {i}'] = [img_url]
                 
                 df = pd.DataFrame(csv_data)
-                csv = df.to_csv(index=False)
+                csv = df.to_csv(index=False).encode('utf-8')
                 
                 st.download_button(
                     label="📥 Download as CSV",
                     data=csv,
-                    file_name=f"jumia_product_{product_data['SKU']}.csv",
+                    file_name=f"jumia_product_{product_data['SKU'] or 'data'}.csv",
                     mime="text/csv"
                 )
                 
         except Exception as e:
-            st.error(f"Error: {str(e)}")
+            st.error(f"A critical error occurred: {str(e)}")
             st.exception(e)
             
             # Troubleshooting tips
@@ -328,20 +268,9 @@ if st.button("Fetch Product Data", type="primary"):
                 st.markdown("""
                 **Common issues and solutions:**
                 
-                1. **ChromeDriver not found:**
-                   - Install: `pip install webdriver-manager`
-                   - Or download manually from https://chromedriver.chromium.org/
-                
-                2. **Chrome browser not installed:**
-                   - Install Google Chrome browser
-                
-                3. **Still getting errors:**
-                   - Make sure Chrome and ChromeDriver versions match
-                   - Run: `pip install --upgrade selenium`
-                   
-                4. **For Streamlit Cloud:**
-                   - Make sure you have packages.txt with chromium and chromium-driver
-                   - Make sure requirements.txt has all dependencies
+                1. **If deploying to Streamlit Cloud:** Ensure your `packages.txt` and `requirements.txt` files are correct as per the instructions above.
+                2. **"Failed to create driver instance" (Local):** Make sure you have Google Chrome installed and that your Selenium version is recent (`pip install --upgrade selenium`).
+                3. **Elements not found:** The website structure may have changed. The scraper needs to be updated to match new Jumia HTML classes/tags.
                 """)
         
         finally:
@@ -354,4 +283,4 @@ if st.button("Fetch Product Data", type="primary"):
 
 # Add footer
 st.markdown("---")
-st.markdown("Built with Streamlit & Selenium | Scrapes Jumia Kenya product information")
+st.markdown("Built with **Streamlit** & **Selenium** | Scrapes Jumia Kenya product information")
