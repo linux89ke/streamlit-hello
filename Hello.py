@@ -14,7 +14,7 @@ from io import BytesIO
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Scraper", page_icon="🛒", layout="wide")
 
-st.title("Scraper (V7.2 - Kenya & Uganda)")
+st.title("Scraper (V7.2 )")
 st.markdown("Enter product URLs via text or Excel upload for batch processing.")
 
 # --- SIDEBAR: SETUP INSTRUCTIONS ---
