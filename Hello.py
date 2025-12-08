@@ -13,7 +13,7 @@ import time
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Jumia Product Scraper", page_icon="🛒", layout="wide")
 
-st.title("🛒 Jumia Product Information Scraper (Final - Model Removed)")
+st.title("🛒 Jumia Product Information Scraper (V6.0 - Final)")
 st.markdown("Enter a Jumia product URL below to extract details, images, and prices.")
 
 # --- SIDEBAR: SETUP INSTRUCTIONS ---
@@ -62,7 +62,7 @@ def get_driver():
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
     return driver
 
-# --- 2. SCRAPING FUNCTION (Model/Config Removed) ---
+# --- 2. SCRAPING FUNCTION (V6.0 FINAL) ---
 def scrape_jumia(url):
     """Scrapes data with maximum robustness, excluding Model/Config."""
     driver = get_driver()
@@ -98,43 +98,37 @@ def scrape_jumia(url):
              data['Brand'] = data['Product Name'].split()[0]
 
 
-        # 3. Seller Name 
+        # 3. Seller Name (V6.0 FIX: Targeting 'Seller Information' link)
         data['Seller Name'] = "N/A"
         
-        # Strategy A: Find the link near "Seller Information" (Primary)
-        seller_header = soup.find(string=re.compile(r"Seller Information|Seller details|Sold by"))
-        if seller_header:
-            container = seller_header.find_parent('div').find_parent('div')
-            if container:
-                all_links = container.find_all('a', href=True)
-                for link in all_links:
-                    text = link.text.strip()
-                    if text and text not in ['Details', 'Follow', 'Visit Store', 'Official Store'] and ('/seller/' in link.get('href') or '/sp-' in link.get('href')):
-                        data['Seller Name'] = text
-                        break
+        try:
+            # Locate the 'Seller Information' section and get the first useful link within it
+            seller_info_block = soup.find('div', class_=lambda x: x and 'card' in x and 'seller-info' in x) 
+            if seller_info_block:
+                seller_name_tag = seller_info_block.find('a', href=re.compile(r'/seller/|/sp-'))
+                if seller_name_tag:
+                    data['Seller Name'] = seller_name_tag.text.strip()
+                # Fallback to bold text (like 'Betech Store' in the screenshot)
+                elif seller_info_block.find('b'):
+                     data['Seller Name'] = seller_info_block.find('b').text.strip()
+        except Exception:
+            pass
         
-        # Strategy B: Find any link with /seller/ in the entire page (Fallback)
-        if data['Seller Name'] == "N/A":
-             seller_tag = soup.find('a', href=re.compile(r'/seller/|/sp-'))
-             if seller_tag:
-                 seller_text = seller_tag.text.strip()
-                 if seller_text not in ['Details', 'Follow', 'Visit Store']:
-                    data['Seller Name'] = seller_text
-                 else:
-                    seller_name_near = seller_tag.find_previous_sibling()
-                    if seller_name_near and seller_name_near.name in ['span', 'div']:
-                        data['Seller Name'] = seller_name_near.text.strip()
+        # Final cleanup for the common failure case
+        if data['Seller Name'].lower() in ['details', 'follow', 'visit store', 'sell on jumia']:
+             data['Seller Name'] = "N/A"
 
 
-        # 4. Category
+        # 4. Category (V6.0 FIX: Targeting structure shown in screenshot)
         cats = []
         try:
-            category_xpath = "//ol//li//a | //nav//li//a | //div[contains(@class, 'br-c')]//a"
+            # Target the list structure at the top of the page
+            category_xpath = "//nav//ol//li//a | //div[contains(@class, 'breadcrumb')]//a"
             category_links = driver.find_elements(By.XPATH, category_xpath)
             
             for link in category_links:
                 txt = link.text.strip()
-                if txt and txt.lower() not in ['home', 'jumia'] and txt != data['Product Name']:
+                if txt and txt.lower() not in ['home', 'jumia', ''] and txt != data['Product Name']:
                     cats.append(txt)
         except Exception:
             pass
@@ -157,7 +151,7 @@ def scrape_jumia(url):
              if match:
                  data['SKU'] = match.group(1)
 
-        # 6. Images
+        # 6. Images (Confirmed Working)
         imgs = []
         for img in soup.find_all('img'):
             src = img.get('data-src') or img.get('src')
