@@ -9,12 +9,13 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import re
 import time
+from io import BytesIO
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Jumia Product Scraper", page_icon="🛒", layout="wide")
 
-st.title("🛒 Jumia Product Information Scraper (V6.4 - Final Format)")
-st.markdown("Enter a Jumia product URL below to extract details, images, and prices.")
+st.title("🛒 Jumia Batch Product Scraper (V7.0 - Final)")
+st.markdown("Enter Jumia product URLs via text or Excel upload for batch processing.")
 
 # --- SIDEBAR: SETUP INSTRUCTIONS ---
 with st.sidebar:
@@ -58,12 +59,47 @@ def get_driver():
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
     return driver
 
-# --- 2. SCRAPING FUNCTION (V6.4 FINAL) ---
+# --- 2. URL INPUT HANDLING FUNCTION ---
+def get_urls_from_input(url_text, uploaded_file):
+    """Parses URLs from text input and uploaded Excel file."""
+    urls = set()
+
+    # 1. Process Text Input
+    if url_text:
+        # Split by newline, comma, or space and filter invalid links
+        text_urls = re.split(r'[\n, ]', url_text)
+        for url in text_urls:
+            url = url.strip()
+            if "jumia.co.ke" in url and url.startswith("http"):
+                urls.add(url)
+    
+    # 2. Process File Upload
+    if uploaded_file is not None:
+        try:
+            # Read all sheets and columns from Excel/CSV
+            if uploaded_file.name.endswith('.xlsx'):
+                df = pd.read_excel(uploaded_file, header=None)
+            else: # Assuming CSV
+                df = pd.read_csv(uploaded_file, header=None)
+                
+            # Iterate through all cells to find URLs
+            for col in df.columns:
+                for cell in df[col].astype(str):
+                    if "jumia.co.ke" in cell and cell.startswith("http"):
+                        urls.add(cell)
+
+        except Exception as e:
+            st.error(f"Error reading file: {e}")
+    
+    return list(urls)
+
+# --- 3. SCRAPING FUNCTION (V6.4 FINAL) ---
+# Note: config extraction is permanently removed here
 def scrape_jumia(url):
-    """Scrapes data with maximum robustness, excluding Model/Config."""
+    """Scrapes data with maximum robustness."""
     driver = get_driver()
     if not driver:
-        return None
+        return {'URL': url, 'Product Name': 'DRIVER_ERROR'}
 
     try:
         driver.get(url)
@@ -72,14 +108,13 @@ def scrape_jumia(url):
         time.sleep(2) 
         
         soup = BeautifulSoup(driver.page_source, 'html.parser')
-        data = {}
+        data = {'URL': url, 'Product Name': 'N/A', 'Brand': 'N/A', 'Seller Name': 'N/A', 'Category': 'N/A', 'SKU': 'N/A', 'Image URLs': []}
 
         # 1. Product Name
         name_tag = soup.find('h1')
         data['Product Name'] = name_tag.text.strip() if name_tag else "N/A"
         
         # 2. Brand 
-        data['Brand'] = "N/A"
         brand_label = soup.find(string=re.compile(r"Brand:\s*"))
         if brand_label:
             brand_parent = brand_label.find_parent('div')
@@ -94,9 +129,7 @@ def scrape_jumia(url):
              data['Brand'] = data['Product Name'].split()[0]
 
 
-        # 3. Seller Name (V6.2 DEFINITIVE FIX)
-        data['Seller Name'] = "N/A"
-        
+        # 3. Seller Name 
         try:
             seller_stats_container = soup.find('div', class_='-hr -pas')
             if seller_stats_container:
@@ -111,7 +144,7 @@ def scrape_jumia(url):
              data['Seller Name'] = "N/A"
 
 
-        # 4. Category (V6.1 FIX: Definitive Fix using 'brcbs' class)
+        # 4. Category 
         cats = []
         try:
             category_container = soup.find('div', class_='brcbs')
@@ -130,14 +163,10 @@ def scrape_jumia(url):
         data['Category'] = " > ".join(list(dict.fromkeys(cats))) if cats else "N/A"
 
         # 5. SKU 
-        data['SKU'] = "N/A"
-        
-        # Look in spec list items
-        specs_list = soup.find_all('li', class_='-pvxs') 
-        for item in specs_list:
-            text = item.get_text(strip=True)
-            if 'SKU' in text:
-                data['SKU'] = text.replace('SKU', '').replace(':', '').strip()
+        all_text = soup.get_text(separator=' ', strip=True) 
+        sku_match = re.search(r'SKU[:\s]*([A-Z0-9]+)', all_text) 
+        if sku_match:
+            data['SKU'] = sku_match.group(1).strip()
         
         # Fallback for SKU (from URL)
         if data['SKU'] == "N/A":
@@ -157,8 +186,8 @@ def scrape_jumia(url):
         return data
 
     except Exception as e:
-        st.error(f"Scraping Error: {str(e)}")
-        return None
+        st.error(f"Scraping Error for {url}: {str(e)}")
+        return {'URL': url, 'Product Name': 'SCRAPE_FAILED', 'Error': str(e)}
     finally:
         if driver:
             try:
@@ -166,97 +195,105 @@ def scrape_jumia(url):
             except:
                 pass
 
-# --- 3. MAIN UI LOGIC (Uses Session State) ---
+# --- MAIN APP LOGIC ---
 
-# Initialize session state if not already done
-if 'product_data' not in st.session_state:
-    st.session_state['product_data'] = None
+# Initialize session state for all results
+if 'all_product_data' not in st.session_state:
+    st.session_state['all_product_data'] = []
 
-url_input = st.text_input("Enter Jumia Product URL:", placeholder="https://www.jumia.co.ke/...")
+st.markdown("---")
 
-# 'Fetch' button logic
+col_text, col_file = st.columns(2)
+
+with col_text:
+    url_text = st.text_area("Paste URLs (one per line, comma, or space separated):", height=200, 
+                            placeholder="https://www.jumia.co.ke/product-1...\nhttps://www.jumia.co.ke/product-2...")
+
+with col_file:
+    uploaded_file = st.file_uploader("Upload Excel/CSV file with URLs:", type=['xlsx', 'csv'])
+    st.markdown("*(The file will be searched for any cell containing a Jumia product URL)*")
+
+
 if st.button("Fetch Product Data", type="primary"):
-    if not url_input or "jumia.co.ke" not in url_input:
-        st.error("Please enter a valid Jumia Kenya URL")
+    urls_to_scrape = get_urls_from_input(url_text, uploaded_file)
+    
+    if not urls_to_scrape:
+        st.error("Please enter valid Jumia URLs or upload a file containing them.")
+        st.session_state['all_product_data'] = []
     else:
-        st.session_state['product_data'] = None
+        st.session_state['all_product_data'] = []
+        total_urls = len(urls_to_scrape)
+        
+        st.info(f"Starting batch scrape for **{total_urls}** unique URLs...")
+        progress_bar = st.progress(0)
+        
+        for i, url in enumerate(urls_to_scrape):
+            # Update progress
+            progress = (i + 1) / total_urls
+            progress_bar.progress(progress)
             
-        with st.spinner("Initializing robust driver & fetching data..."):
-            scraped_data = scrape_jumia(url_input)
+            # Scrape data
+            scraped_data = scrape_jumia(url)
             
-            if scraped_data:
-                st.session_state['product_data'] = scraped_data
-                st.session_state['url'] = url_input
-                st.success("Data fetched!")
+            if scraped_data and 'Product Name' in scraped_data and scraped_data['Product Name'] not in ['DRIVER_ERROR', 'SCRAPE_FAILED']:
+                st.session_state['all_product_data'].append(scraped_data)
 
-# --- 4. DISPLAY LOGIC (Run if data exists in session state) ---
-if st.session_state.product_data:
-    data = st.session_state.product_data
-    
-    # --- HORIZONTAL DATA OUTPUT ---
-    st.subheader("📋 Horizontal Data Output (Copyable Table)")
-    st.markdown("Use this table for easy copy-pasting into spreadsheets/documents.")
+        progress_bar.empty()
+        st.success(f"Batch scrape finished! Successfully processed **{len(st.session_state['all_product_data'])}** items.")
+        st.rerun() # Rerun to update the display outside the button block
 
-    # Prepare the single row of data
-    first_image_url = data['Image URLs'][0] if data['Image URLs'] else "N/A"
-    
-    horizontal_data = {
-        'Seller Name': [data['Seller Name']],
-        'SKU': [data['SKU']],
-        'config': [data['SKU']], # <-- SKU MIRRORED HERE
-        'Product Name': [data['Product Name']],
-        'Brand': [data['Brand']],
-        'Category': [data['Category']],
-        'Image URL': [first_image_url]
-    }
-    
-    column_order = ['Seller Name', 'SKU', 'config', 'Product Name', 'Brand', 'Category', 'Image URL']
-    
-    df_horizontal = pd.DataFrame(horizontal_data, columns=column_order)
+# --- DISPLAY RESULTS AND DOWNLOAD ---
 
-    st.dataframe(df_horizontal, hide_index=True)
+if st.session_state['all_product_data']:
+    data_list = st.session_state['all_product_data']
     
-    # --- VERTICAL DATA OUTPUT (FOR REFERENCE) ---
+    # 1. Prepare data for the final horizontal table
+    processed_rows = []
+    for item in data_list:
+        first_image_url = item['Image URLs'][0] if item['Image URLs'] else "N/A"
+        
+        # Create row in the required format
+        row = {
+            'Seller Name': item.get('Seller Name', 'N/A'),
+            'SKU': item.get('SKU', 'N/A'),
+            'Product Name': item.get('Product Name', 'N/A'),
+            'Brand': item.get('Brand', 'N/A'),
+            'Category': item.get('Category', 'N/A'),
+            'Image URL': first_image_url,
+            'Original URL': item.get('URL', 'N/A')
+        }
+        processed_rows.append(row)
 
-    col1, col2 = st.columns([1, 1])
+    df_final = pd.DataFrame(processed_rows)
     
-    with col1:
-        st.subheader("📋 Requested Product Details (Vertical View)")
-        display_dict = {k: v for k, v in data.items() if k != 'Image URLs'}
-        df_display = pd.DataFrame([{'Attribute': k, 'Value': v} for k, v in display_dict.items()])
-        st.table(df_display.set_index('Attribute'))
+    # Define the final column order (config is removed)
+    column_order = ['Seller Name', 'SKU', 'Product Name', 'Brand', 'Category', 'Image URL', 'Original URL']
+    df_final = df_final[column_order]
 
-    with col2:
-        st.subheader("🖼️ Product Images")
-        if data['Image URLs']:
-            st.image(data['Image URLs'][0], caption="Main Image Preview", use_column_width=True)
-            with st.expander(f"View all {len(data['Image URLs'])} image links"):
-                for link in data['Image URLs']:
-                    st.write(link)
-        else:
-            st.warning("No images found.")
-
+    # 2. Display the horizontal table
     st.markdown("---")
-    
-    # --- DOWNLOAD CSV ---
-    csv_dict = {'URL': [st.session_state.url]}
-    for k, v in data.items():
-        if k != 'Image URLs':
-            csv_dict[k] = [v]
-    
-    for i, img_url in enumerate(data['Image URLs'][:10], 1):
-        csv_dict[f'Image {i}'] = [img_url]
+    st.subheader("✅ Extracted Product Data")
+    st.markdown("Results ready for copying or downloading.")
+    st.dataframe(df_final, use_container_width=True, hide_index=True)
 
-    df_csv = pd.DataFrame(csv_dict)
-    csv = df_csv.to_csv(index=False).encode('utf-8')
+    # 3. Download CSV
+    @st.cache_data
+    def convert_df_to_csv(df):
+        # Cache the conversion to prevent repeated computation
+        return df.to_csv(index=False).encode('utf-8')
+
+    csv_data = convert_df_to_csv(df_final)
 
     st.download_button(
-        label="📥 Download Data as CSV",
-        data=csv,
-        file_name=f"jumia_{data['SKU']}.csv",
+        label="📥 Download Results as CSV",
+        data=csv_data,
+        file_name="jumia_batch_results.csv",
         mime="text/csv"
     )
 
-    if st.button("Clear Results"):
-        del st.session_state['product_data']
+    if st.button("Clear All Results"):
+        st.session_state['all_product_data'] = []
         st.rerun()
+
+st.markdown("---")
+st.markdown("Built with **Streamlit** & **Selenium** | Scrapes Jumia Kenya product information")
