@@ -12,10 +12,10 @@ import time
 from io import BytesIO
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Scraper", page_icon="🛒", layout="wide")
+st.set_page_config(page_title="Jumia Product Scraper", page_icon="🛒", layout="wide")
 
-st.title("Scraper (V7.1 - Level One Category)")
-st.markdown("Enterproduct URLs via text or Excel upload for batch processing.")
+st.title("🛒 Jumia Batch Product Scraper (V7.2 - Kenya & Uganda)")
+st.markdown("Enter Jumia product URLs (Kenya or Uganda) via text or Excel upload for batch processing.")
 
 # --- SIDEBAR: SETUP INSTRUCTIONS ---
 with st.sidebar:
@@ -61,15 +61,16 @@ def get_driver():
 
 # --- 2. URL INPUT HANDLING FUNCTION ---
 def get_urls_from_input(url_text, uploaded_file):
-    """Parses URLs from text input and uploaded Excel file."""
+    """Parses URLs from text input and uploaded Excel file, checking for both KE and UG domains."""
     urls = set()
+    VALID_DOMAINS = ["jumia.co.ke", "jumia.ug"]
 
     # 1. Process Text Input
     if url_text:
         text_urls = re.split(r'[\n, ]', url_text)
         for url in text_urls:
             url = url.strip()
-            if "jumia.co.ke" in url and url.startswith("http"):
+            if any(domain in url for domain in VALID_DOMAINS) and url.startswith("http"):
                 urls.add(url)
     
     # 2. Process File Upload
@@ -82,7 +83,7 @@ def get_urls_from_input(url_text, uploaded_file):
                 
             for col in df.columns:
                 for cell in df[col].astype(str):
-                    if "jumia.co.ke" in cell and cell.startswith("http"):
+                    if any(domain in cell for domain in VALID_DOMAINS) and cell.startswith("http"):
                         urls.add(cell)
 
         except Exception as e:
@@ -141,7 +142,7 @@ def scrape_jumia(url):
              data['Seller Name'] = "N/A"
 
 
-        # 4. Category (V7.1 FIX: Extract Level One)
+        # 4. Category 
         cats = []
         try:
             category_container = soup.find('div', class_='brcbs')
@@ -157,7 +158,6 @@ def scrape_jumia(url):
         except Exception:
             pass
             
-        # Get the full path first
         full_category = " > ".join(list(dict.fromkeys(cats))) if cats else "N/A"
         
         # Assign only the first level to the 'Category' field
@@ -209,7 +209,7 @@ col_text, col_file = st.columns(2)
 
 with col_text:
     url_text = st.text_area("Paste URLs (one per line, comma, or space separated):", height=200, 
-                            placeholder="https://www.jumia.co.ke/product-1...\nhttps://www.jumia.co.ke/product-2...")
+                            placeholder="https://www.jumia.co.ke/product-1...\nhttps://www.jumia.ug/product-2...")
 
 with col_file:
     uploaded_file = st.file_uploader("Upload Excel/CSV file with URLs:", type=['xlsx', 'csv'])
@@ -299,4 +299,4 @@ if st.session_state['all_product_data']:
         st.rerun()
 
 st.markdown("---")
-st.markdown("Built with **Streamlit** & **Selenium** | Scrapes Jumia Kenya product information")
+st.markdown("Built with **Streamlit** & **Selenium** | Scrapes Jumia Kenya/Uganda product information")
