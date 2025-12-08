@@ -108,70 +108,249 @@ if st.button("Fetch Product Data", type="primary"):
                 # Extract data
                 product_data = {}
                 
-                # Product Name
+                # Product Name (from h1)
                 product_name = soup.find('h1')
                 product_data['Product Name'] = product_name.text.strip() if product_name else "N/A"
                 
-                # Brand
+                # Brand - Look in the breadcrumb or "Similar products from" section
                 brand_elem = None
-                # Try multiple methods to find brand
-                brand_patterns = [
-                    soup.find('a', {'href': re.compile(r'/[^/]+-\d+/$')}),
-                    soup.find(text=re.compile(r'Brand:', re.I))
-                ]
+                # Method 1: Look for "Similar products from [Brand]" link
+                similar_text = soup.find(text=re.compile(r'Similar products from', re.I))
+                if similar_text:
+                    brand_link = similar_text.find_next('a')
+                    if brand_link:
+                        brand_elem = brand_link
                 
-                for pattern in brand_patterns:
-                    if pattern:
-                        if hasattr(pattern, 'find_next'):
-                            brand_elem = pattern.find_next('a')
-                        else:
-                            brand_elem = pattern
-                        break
+                # Method 2: Look in specifications section
+                if not brand_elem:
+                    spec_list = soup.find_all(['li', 'tr', 'div'])
+                    for item in spec_list:
+                        if 'Brand:' in item.text or 'brand:' in item.text.lower():
+                            # Extract text after "Brand:"
+                            text = item.text
+                            if 'Brand:' in text:
+                                brand_text = text.split('Brand:')[1].strip().split('\n')[0].strip()
+                                if brand_text:
+                                    product_data['Brand'] = brand_text
+                                    break
                 
-                product_data['Brand'] = brand_elem.text.strip() if brand_elem else "N/A"
+                if not product_data.get('Brand') and brand_elem:
+                    product_data['Brand'] = brand_elem.text.strip()
+                elif not product_data.get('Brand'):
+                    product_data['Brand'] = "N/A"
                 
-                # SKU
-                sku_elem = soup.find(text=re.compile(r'SKU:', re.I))
-                if sku_elem:
-                    sku_parent = sku_elem.find_parent()
-                    sku_text = sku_parent.text.replace('SKU:', '').strip() if sku_parent else "N/A"
-                    product_data['SKU'] = sku_text
-                else:
+                # SKU - Look in specifications
+                sku_found = False
+                all_text = soup.get_text()
+                sku_match = re.search(r'SKU:\s*([A-Z0-9]+)', all_text, re.I)
+                if sku_match:
+                    product_data['SKU'] = sku_match.group(1).strip()
+                    sku_found = True
+                
+                if not sku_found:
+                    # Try finding in list items
+                    list_items = soup.find_all(['li', 'div', 'span'])
+                    for item in list_items:
+                        item_text = item.get_text()
+                        if 'SKU:' in item_text:
+                            sku = item_text.split('SKU:')[1].strip().split()[0]
+                            product_data['SKU'] = sku
+                            sku_found = True
+                            break
+                
+                if not sku_found:
                     product_data['SKU'] = "N/A"
                 
-                # Model/Config
-                model_elem = soup.find(text=re.compile(r'Model:', re.I))
-                if model_elem:
-                    model_parent = model_elem.find_parent()
-                    model_text = model_parent.text.replace('Model:', '').strip() if model_parent else "N/A"
-                    product_data['Model/Config'] = model_text
-                else:
+                # Model/Config - Look in specifications
+                model_found = False
+                model_match = re.search(r'Model:\s*([A-Z0-9]+)', all_text, re.I)
+                if model_match:
+                    product_data['Model/Config'] = model_match.group(1).strip()
+                    model_found = True
+                
+                if not model_found:
+                    list_items = soup.find_all(['li', 'div', 'span'])
+                    for item in list_items:
+                        item_text = item.get_text()
+                        if 'Model:' in item_text:
+                            model = item_text.split('Model:')[1].strip().split()[0]
+                            product_data['Model/Config'] = model
+                            model_found = True
+                            break
+                
+                if not model_found:
                     product_data['Model/Config'] = "N/A"
                 
-                # Category (from breadcrumbs)
-                breadcrumb_links = soup.find_all('a', {'href': True})
+                # Category - Parse breadcrumb navigation properly
                 categories = []
-                for link in breadcrumb_links:
+                # Look for nav or breadcrumb elements
+                nav_elements = soup.find_all('a', {'href': re.compile(r'^/')})
+                
+                for link in nav_elements:
                     href = link.get('href', '')
-                    if any(cat in href for cat in ['/electronics/', '/phones-tablets/', '/computing/', '/category-']):
-                        text = link.text.strip()
-                        if text and text not in categories and text != 'Home':
-                            categories.append(text)
+                    text = link.text.strip()
+                    
+                    # Only include category links (not footer, not product links)
+                    if text and href.startswith('/') and not href.endswith('.html'):
+                        # Check if it's a category link
+                        if any(cat in href for cat in ['/electronics/', '/phones-tablets/', '/televisions/', 
+                                                       '/computing/', '/home-office/', '/fashion/',
+                                                       '/smart-tvs', '/category-']):
+                            if text not in categories and text.lower() not in ['home', 'shop', 'all']:
+                                categories.append(text)
                 
-                product_data['Category'] = " > ".join(categories[:5]) if categories else "N/A"
+                # Remove duplicates and limit
+                seen = set()
+                unique_cats = []
+                for cat in categories:
+                    cat_lower = cat.lower()
+                    if cat_lower not in seen:
+                        seen.add(cat_lower)
+                        unique_cats.append(cat)
                 
-                # Seller Name
-                seller_elem = soup.find('a', {'href': re.compile(r'/[^/]+/$')})
-                if seller_elem and 'store' in seller_elem.get('href', '').lower():
-                    product_data['Seller Name'] = seller_elem.text.strip()
-                else:
-                    # Alternative method
-                    seller_section = soup.find(text=re.compile(r'Seller', re.I))
-                    if seller_section:
-                        seller_link = seller_section.find_next('a')
-                        product_data['Seller Name'] = seller_link.text.strip() if seller_link else "N/A"
+                product_data['Category'] = " > ".join(unique_cats[:6]) if unique_cats else "N/A"
+                
+                # Seller Name - Look for seller information section
+                seller_found = False
+                
+                # Method 1: Look for href with "-store" or seller profile
+                seller_links = soup.find_all('a', {'href': re.compile(r'/[^/]+-store/|/[^/]+/
+                
+                # Image URLs
+                images = []
+                img_elements = soup.find_all('img', {'src': True})
+                
+                for img in img_elements:
+                    img_url = img.get('src') or img.get('data-src')
+                    if img_url and 'product' in img_url and 'jumia.is' in img_url:
+                        if img_url.startswith('//'):
+                            img_url = 'https:' + img_url
+                        if img_url not in images:
+                            images.append(img_url)
+                
+                product_data['Image URLs'] = images
+                
+                # Close browser
+                driver.quit()
+                driver = None
+                
+                # Display results
+                st.success("✅ Product data fetched successfully!")
+                
+                # Create two columns
+                col1, col2 = st.columns([1, 1])
+                
+                with col1:
+                    st.subheader("📋 Product Details")
+                    st.write(f"**Product Name:** {product_data['Product Name']}")
+                    st.write(f"**Brand:** {product_data['Brand']}")
+                    st.write(f"**SKU:** {product_data['SKU']}")
+                    st.write(f"**Model/Config:** {product_data['Model/Config']}")
+                    st.write(f"**Category:** {product_data['Category']}")
+                    st.write(f"**Seller Name:** {product_data['Seller Name']}")
+                
+                with col2:
+                    st.subheader("🖼️ Product Images")
+                    if images:
+                        st.write(f"Found {len(images)} images")
+                        # Display first image as preview
+                        try:
+                            st.image(images[0], caption="Main Product Image", use_column_width=True)
+                        except:
+                            st.warning("Could not display image preview")
                     else:
-                        product_data['Seller Name'] = "N/A"
+                        st.warning("No images found")
+                
+                # Display all image URLs
+                if images:
+                    st.subheader("📷 All Image URLs")
+                    for i, img_url in enumerate(images, 1):
+                        st.code(img_url, language=None)
+                
+                # Create downloadable CSV
+                st.subheader("💾 Download Data")
+                
+                # Prepare data for CSV
+                csv_data = {
+                    'Seller Name': [product_data['Seller Name']],
+                    'SKU': [product_data['SKU']],
+                    'Product Name': [product_data['Product Name']],
+                    'Brand': [product_data['Brand']],
+                    'Category': [product_data['Category']],
+                    'Model/Config': [product_data['Model/Config']],
+                }
+                
+                # Add image URLs
+                for i, img_url in enumerate(images[:10], 1):
+                    csv_data[f'Image URL {i}'] = [img_url]
+                
+                df = pd.DataFrame(csv_data)
+                csv = df.to_csv(index=False)
+                
+                st.download_button(
+                    label="📥 Download as CSV",
+                    data=csv,
+                    file_name=f"jumia_product_{product_data['SKU']}.csv",
+                    mime="text/csv"
+                )
+                
+        except Exception as e:
+            st.error(f"Error: {str(e)}")
+            st.exception(e)
+            
+            # Troubleshooting tips
+            with st.expander("🔧 Troubleshooting"):
+                st.markdown("""
+                **Common issues and solutions:**
+                
+                1. **ChromeDriver not found:**
+                   - Install: `pip install webdriver-manager`
+                   - Or download manually from https://chromedriver.chromium.org/
+                
+                2. **Chrome browser not installed:**
+                   - Install Google Chrome browser
+                
+                3. **Still getting errors:**
+                   - Try unchecking "Run in headless mode"
+                   - Make sure Chrome and ChromeDriver versions match
+                   - Run: `pip install --upgrade selenium`
+                """)
+        
+        finally:
+            # Make sure browser is closed
+            if driver:
+                try:
+                    driver.quit()
+                except:
+                    pass
+
+# Add footer
+st.markdown("---")
+st.markdown("Built with Streamlit & Selenium | Scrapes Jumia Kenya product information"))})
+                for link in seller_links:
+                    href = link.get('href', '')
+                    # Check if this looks like a seller/store link
+                    if any(x in href.lower() for x in ['-store/', 'seller', 'shop']) or \
+                       (href.count('/') == 2 and not href.endswith('.html')):
+                        seller_name = link.text.strip()
+                        if seller_name and len(seller_name) < 50:  # Reasonable seller name length
+                            product_data['Seller Name'] = seller_name
+                            seller_found = True
+                            break
+                
+                # Method 2: Search for "Seller Information" section
+                if not seller_found:
+                    seller_heading = soup.find(text=re.compile(r'Seller Information|Sold by', re.I))
+                    if seller_heading:
+                        seller_section = seller_heading.find_next(['a', 'div', 'span'])
+                        if seller_section:
+                            seller_name = seller_section.text.strip()
+                            if seller_name:
+                                product_data['Seller Name'] = seller_name
+                                seller_found = True
+                
+                if not seller_found:
+                    product_data['Seller Name'] = "N/A"
                 
                 # Image URLs
                 images = []
