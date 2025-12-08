@@ -14,7 +14,7 @@ from io import BytesIO
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Jumia Product Scraper", page_icon="🛒", layout="wide")
 
-st.title("🛒 Jumia Batch Product Scraper (V7.0 - Final)")
+st.title("🛒 Jumia Batch Product Scraper (V7.1 - Level One Category)")
 st.markdown("Enter Jumia product URLs via text or Excel upload for batch processing.")
 
 # --- SIDEBAR: SETUP INSTRUCTIONS ---
@@ -66,7 +66,6 @@ def get_urls_from_input(url_text, uploaded_file):
 
     # 1. Process Text Input
     if url_text:
-        # Split by newline, comma, or space and filter invalid links
         text_urls = re.split(r'[\n, ]', url_text)
         for url in text_urls:
             url = url.strip()
@@ -76,13 +75,11 @@ def get_urls_from_input(url_text, uploaded_file):
     # 2. Process File Upload
     if uploaded_file is not None:
         try:
-            # Read all sheets and columns from Excel/CSV
             if uploaded_file.name.endswith('.xlsx'):
                 df = pd.read_excel(uploaded_file, header=None)
-            else: # Assuming CSV
+            else: 
                 df = pd.read_csv(uploaded_file, header=None)
                 
-            # Iterate through all cells to find URLs
             for col in df.columns:
                 for cell in df[col].astype(str):
                     if "jumia.co.ke" in cell and cell.startswith("http"):
@@ -93,8 +90,7 @@ def get_urls_from_input(url_text, uploaded_file):
     
     return list(urls)
 
-# --- 3. SCRAPING FUNCTION (V6.4 FINAL) ---
-# Note: config extraction is permanently removed here
+# --- 3. SCRAPING FUNCTION (V7.1) ---
 def scrape_jumia(url):
     """Scrapes data with maximum robustness."""
     driver = get_driver()
@@ -115,6 +111,7 @@ def scrape_jumia(url):
         data['Product Name'] = name_tag.text.strip() if name_tag else "N/A"
         
         # 2. Brand 
+        data['Brand'] = "N/A"
         brand_label = soup.find(string=re.compile(r"Brand:\s*"))
         if brand_label:
             brand_parent = brand_label.find_parent('div')
@@ -130,13 +127,13 @@ def scrape_jumia(url):
 
 
         # 3. Seller Name 
+        data['Seller Name'] = "N/A"
         try:
             seller_stats_container = soup.find('div', class_='-hr -pas')
             if seller_stats_container:
                 seller_name_tag = seller_stats_container.find('p', class_='-m -pbs')
                 if seller_name_tag:
                     data['Seller Name'] = seller_name_tag.text.strip()
-            
         except Exception:
             pass
         
@@ -144,7 +141,7 @@ def scrape_jumia(url):
              data['Seller Name'] = "N/A"
 
 
-        # 4. Category 
+        # 4. Category (V7.1 FIX: Extract Level One)
         cats = []
         try:
             category_container = soup.find('div', class_='brcbs')
@@ -160,9 +157,15 @@ def scrape_jumia(url):
         except Exception:
             pass
             
-        data['Category'] = " > ".join(list(dict.fromkeys(cats))) if cats else "N/A"
+        # Get the full path first
+        full_category = " > ".join(list(dict.fromkeys(cats))) if cats else "N/A"
+        
+        # Assign only the first level to the 'Category' field
+        data['Category'] = full_category.split(' > ')[0]
+
 
         # 5. SKU 
+        data['SKU'] = "N/A"
         all_text = soup.get_text(separator=' ', strip=True) 
         sku_match = re.search(r'SKU[:\s]*([A-Z0-9]+)', all_text) 
         if sku_match:
@@ -175,13 +178,12 @@ def scrape_jumia(url):
                  data['SKU'] = match.group(1)
 
         # 6. Images 
-        imgs = []
+        data['Image URLs'] = []
         for img in soup.find_all('img'):
             src = img.get('data-src') or img.get('src')
             if src and 'jumia.is' in src and ('/product/' in src or '/unsafe/' in src):
                 if src.startswith('//'): src = 'https:' + src
-                if src not in imgs: imgs.append(src)
-        data['Image URLs'] = imgs
+                if src not in data['Image URLs']: data['Image URLs'].append(src)
         
         return data
 
@@ -221,6 +223,7 @@ if st.button("Fetch Product Data", type="primary"):
         st.error("Please enter valid Jumia URLs or upload a file containing them.")
         st.session_state['all_product_data'] = []
     else:
+        # Clear previous results before starting batch
         st.session_state['all_product_data'] = []
         total_urls = len(urls_to_scrape)
         
@@ -235,12 +238,12 @@ if st.button("Fetch Product Data", type="primary"):
             # Scrape data
             scraped_data = scrape_jumia(url)
             
-            if scraped_data and 'Product Name' in scraped_data and scraped_data['Product Name'] not in ['DRIVER_ERROR', 'SCRAPE_FAILED']:
+            if scraped_data and scraped_data.get('Product Name') not in ['DRIVER_ERROR', 'SCRAPE_FAILED']:
                 st.session_state['all_product_data'].append(scraped_data)
 
         progress_bar.empty()
         st.success(f"Batch scrape finished! Successfully processed **{len(st.session_state['all_product_data'])}** items.")
-        st.rerun() # Rerun to update the display outside the button block
+        st.rerun() 
 
 # --- DISPLAY RESULTS AND DOWNLOAD ---
 
@@ -258,7 +261,7 @@ if st.session_state['all_product_data']:
             'SKU': item.get('SKU', 'N/A'),
             'Product Name': item.get('Product Name', 'N/A'),
             'Brand': item.get('Brand', 'N/A'),
-            'Category': item.get('Category', 'N/A'),
+            'Category': item.get('Category', 'N/A'), # Uses the Level One category
             'Image URL': first_image_url,
             'Original URL': item.get('URL', 'N/A')
         }
@@ -266,7 +269,7 @@ if st.session_state['all_product_data']:
 
     df_final = pd.DataFrame(processed_rows)
     
-    # Define the final column order (config is removed)
+    # Define the final column order (config removed)
     column_order = ['Seller Name', 'SKU', 'Product Name', 'Brand', 'Category', 'Image URL', 'Original URL']
     df_final = df_final[column_order]
 
