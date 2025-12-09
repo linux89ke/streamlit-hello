@@ -206,7 +206,7 @@ with col_text:
 
 with col_file:
     uploaded_file = st.file_uploader("Upload Excel/CSV file with URLs:", type=['xlsx', 'csv'])
-    st.markdown("*(The file will be searched for any cell containing a Jumia product URL)*")
+    st.markdown("*(The file will be searched for any cell URLs)*")
 
 
 if st.button("Fetch Product Data", type="primary"):
