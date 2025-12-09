@@ -19,16 +19,9 @@ st.markdown("Enter product URLs via text or Excel upload for batch processing.")
 
 # --- SIDEBAR: SETUP INSTRUCTIONS ---
 with st.sidebar:
-    st.header("📦 Deployment Info")
-    st.info("If deploying to Streamlit Cloud, ensure you have these files:")
-    with st.expander("requirements.txt"):
-        st.code("""streamlit
-selenium
-beautifulsoup4
-pandas""", language="text")
-    with st.expander("packages.txt"):
-        st.code("""chromium
-chromium-driver""", language="text")
+    st.header("Usage")
+    st.info("Either Paste multiple links or upload Excel file with links")
+
 
 # --- 1. DRIVER SETUP FUNCTION ---
 def get_driver():
