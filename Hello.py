@@ -299,4 +299,4 @@ if st.session_state['all_product_data']:
         st.rerun()
 
 st.markdown("---")
-st.markdown("Built with **Streamlit** & **Selenium** | Scrapes Jumia Kenya/Uganda product information")
+st.markdown("Built with **Streamlit** & **Selenium** ")
