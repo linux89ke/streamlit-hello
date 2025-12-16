@@ -12,10 +12,10 @@ import re
 import time
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Jumia Scraper Pro", page_icon="🛒", layout="wide")
+st.set_page_config(page_title="Scraper Pro", page_icon="🛒", layout="wide")
 
-st.title("🛒 Jumia Scraper (V8.2 - With Blank Column)")
-st.markdown("Extract product data from **Jumia Kenya (KE)** and **Uganda (UG)**.")
+st.title("🛒 Scraper (V8.2 )")
+st.markdown("Extract product data")
 
 # --- SIDEBAR: SETUP ---
 with st.sidebar:
