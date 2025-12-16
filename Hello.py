@@ -199,7 +199,7 @@ with col_file:
     uploaded_file = st.file_uploader("Upload Excel/CSV:", type=['xlsx', 'csv'])
 
 col_btn, col_stop = st.columns([1, 4])
-start_btn = col_btn.button("🚀 Start Scraping", type="primary")
+start_btn = col_btn.button("Start Scraping", type="primary")
 
 if start_btn:
     urls_to_scrape = get_urls_from_input(url_text, uploaded_file)
@@ -217,14 +217,14 @@ if start_btn:
                 st.session_state['all_product_data'].append(scraped_data)
             progress_bar.progress((i + 1) / total_urls)
         
-        st.success("✅ Complete!")
+        st.success(" Complete!")
         st.rerun()
 
 # --- RESULTS DISPLAY ---
 
 if st.session_state['all_product_data']:
     st.markdown("---")
-    st.subheader(f"📊 Results")
+    st.subheader(f"Results")
 
     display_data = []
     for item in st.session_state['all_product_data']:
@@ -246,13 +246,13 @@ if st.session_state['all_product_data']:
 
     csv = df.to_csv(index=False).encode('utf-8')
     st.download_button(
-        label="📥 Download CSV",
+        label="Download CSV",
         data=csv,
         file_name="jumia_express_results_v2.csv",
         mime="text/csv",
         type="primary"
     )
     
-    if st.button("🗑️ Clear Results"):
+    if st.button(" Clear Results"):
         st.session_state['all_product_data'] = []
         st.rerun()
