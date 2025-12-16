@@ -12,19 +12,19 @@ import re
 import time
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Jumia Scraper Pro", page_icon="🛒", layout="wide")
+st.set_page_config(page_title="Scraper", page_icon="🛒", layout="wide")
 
-st.title("🛒 Jumia Scraper (V8.3 - SKU Support)")
+st.title(" Scraper")
 st.markdown("Extract data using **Product URLs** or just **SKUs**.")
 
 # --- SIDEBAR: SETUP ---
 with st.sidebar:
-    st.header("⚙️ Configuration")
+    st.header(" Configuration")
     
     # 1. Store Selector (Critical for SKU searches)
     store_region = st.radio(
         "Default Store for SKUs:",
-        ("Kenya (jumia.co.ke)", "Uganda (jumia.ug)"),
+        ("links"),
         index=0
     )
     domain = "jumia.co.ke" if "Kenya" in store_region else "jumia.ug"
