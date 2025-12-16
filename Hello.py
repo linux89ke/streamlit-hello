@@ -11,7 +11,7 @@ import pandas as pd
 import re
 import time
 
-# --- PAGE CONFIGURATION ---
+# --- PAGE CONFIGURATION (White-Labeled) ---
 st.set_page_config(page_title="Marketplace Data Tool", page_icon="📊", layout="wide")
 
 st.title("🛒 E-Commerce Data Extractor")
@@ -65,16 +65,16 @@ def get_driver():
         driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
     return driver
 
-# --- 2. INPUT PROCESSING (URL vs SKU) ---
+# --- 2. SMART INPUT PROCESSING ---
 def process_inputs(text_input, file_input, default_domain):
     """
-    Scans text and excel files. Distinguishes between direct Links and SKUs.
+    Intelligently sorts inputs into URLs or SKUs.
     """
     raw_items = set()
     
-    # 1. Process Text Box
+    # 1. Process Text Box (Split by newlines, commas, or spaces)
     if text_input:
-        items = re.split(r'[\n, ]', text_input)
+        items = re.split(r'[\n,]', text_input) # Split by newlines or commas
         for i in items:
             clean_item = i.strip()
             if clean_item: raw_items.add(clean_item)
@@ -98,14 +98,20 @@ def process_inputs(text_input, file_input, default_domain):
     final_targets = []
     
     for item in raw_items:
-        # If it looks like a URL
-        if item.startswith("http"):
-            final_targets.append({"type": "url", "value": item})
-        # If it looks like a SKU (alphanumeric, usually 8+ chars, no spaces)
-        elif len(item) > 4 and " " not in item: 
+        # CLEANUP: Remove common prefixes users might paste
+        clean_val = item.replace("SKU:", "").replace("sku:", "").strip()
+        
+        # LOGIC: 
+        # If it contains "http" or "www." -> It's a URL
+        if "http" in clean_val or "www." in clean_val:
+            if not clean_val.startswith("http"): clean_val = "https://" + clean_val
+            final_targets.append({"type": "url", "value": clean_val})
+            
+        # If it is alphanumeric and NOT a URL -> It's a SKU
+        elif len(clean_val) > 3: 
             # Construct search URL internally
-            search_url = f"https://www.{default_domain}/catalog/?q={item}"
-            final_targets.append({"type": "sku", "value": search_url, "original_sku": item})
+            search_url = f"https://www.{default_domain}/catalog/?q={clean_val}"
+            final_targets.append({"type": "sku", "value": search_url, "original_sku": clean_val})
             
     return final_targets
 
@@ -125,7 +131,7 @@ def scrape_item(target):
         'Category': 'N/A', 
         'SKU': 'N/A', 
         'Image URLs': [], 
-        ' ': '', 
+        ' ': '',  # THE BLANK COLUMN
         'Express': 'No'
     }
 
@@ -135,32 +141,25 @@ def scrape_item(target):
         # --- SKU SEARCH HANDLING ---
         if is_sku_search:
             try:
-                # Wait for results container
+                # Wait for either a product list OR a direct product page
                 WebDriverWait(driver, 8).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "div.-paxs, article.prd"))
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "article.prd, h1"))
                 )
                 
-                # Check for "No results found" message
-                page_source = driver.page_source
-                if "There are no results for" in page_source:
+                # Check if "No results found"
+                if "There are no results for" in driver.page_source:
                     data['Product Name'] = "SKU_NOT_FOUND"
                     driver.quit()
                     return data
 
-                # Find first product link in search results
-                # Common classes: .core inside .prd or .info inside .prd
+                # If we are on a list page (found 'article.prd'), click the first item
                 product_links = driver.find_elements(By.CSS_SELECTOR, "article.prd a.core")
-                
                 if product_links:
                     first_link = product_links[0].get_attribute("href")
                     driver.get(first_link) # Go to product page
-                else:
-                    data['Product Name'] = "SKU_NOT_FOUND"
-                    driver.quit()
-                    return data
+                # If 'article.prd' is missing but 'h1' exists, we might have been auto-redirected.
                     
             except Exception:
-                # If timeout, maybe it redirected directly? Check if H1 exists
                 pass
 
         # --- PRODUCT PAGE SCRAPING ---
@@ -177,54 +176,45 @@ def scrape_item(target):
         data['Product Name'] = h1.text.strip() if h1 else "N/A"
 
         # 2. Brand
-        # Look for "Brand: X" pattern
         brand_label = soup.find(string=re.compile(r"Brand:\s*"))
         if brand_label and brand_label.parent:
-            # Check for link
             brand_link = brand_label.parent.find('a')
             if brand_link:
                 data['Brand'] = brand_link.text.strip()
             else:
-                # Text fallback
                 txt = brand_label.parent.get_text().replace('Brand:', '').strip()
-                data['Brand'] = txt.split('|')[0].strip() # Clean garbage text
+                data['Brand'] = txt.split('|')[0].strip()
         
         if data['Brand'] in ["N/A", ""] or "generic" in data['Brand'].lower():
-             # Fallback: First word of product name
              data['Brand'] = data['Product Name'].split()[0]
 
         # 3. Seller
-        # Look for the seller box (generic classes often used)
         seller_box = soup.select_one('div.-hr.-pas, div.seller-details')
         if seller_box:
             p_tag = seller_box.find('p', class_='-m')
             if p_tag: data['Seller Name'] = p_tag.text.strip()
         
-        # Filter unwanted seller names
         if any(x in data['Seller Name'].lower() for x in ['details', 'follow', 'sell on', 'n/a']):
              data['Seller Name'] = "N/A"
 
         # 4. Category
         breadcrumbs = soup.select('.osh-breadcrumb a, .brcbs a')
         cats = [b.text.strip() for b in breadcrumbs if b.text.strip()]
-        # Usually index 0 is Home, 1 is Main Cat
         data['Category'] = cats[1] if len(cats) > 1 else (cats[0] if cats else "N/A")
 
         # 5. SKU (Actual Product SKU)
         sku_match = re.search(r'SKU[:\s]*([A-Z0-9\-]+)', soup.get_text())
         if sku_match: data['SKU'] = sku_match.group(1)
-        elif is_sku_search: data['SKU'] = target['original_sku'] # Fallback to input
+        elif is_sku_search: data['SKU'] = target['original_sku'] 
 
         # 6. Images
         for img in soup.find_all('img'):
             src = img.get('data-src') or img.get('src')
-            # Filter logic for product images
             if src and '/product/' in src:
                 if src.startswith('//'): src = 'https:' + src
                 if src not in data['Image URLs']: data['Image URLs'].append(src)
 
         # 7. Express Detection (Internal Logic)
-        # We look for the specific marker, but the user sees generic output
         express_svg = soup.find('svg', attrs={'aria-label': 'Jumia Express'})
         if express_svg:
             data['Express'] = "Yes"
@@ -246,7 +236,7 @@ with col_txt:
     text_in = st.text_area("Paste SKUs or Links (one per line):", height=150)
 with col_upl:
     file_in = st.file_uploader("Upload Excel/CSV:", type=['xlsx', 'csv'])
-    st.caption("Supported formats: .xlsx, .csv")
+    st.caption("Upload any file containing SKUs or Links in any cell.")
 
 btn_col, _ = st.columns([1, 4])
 if btn_col.button("🚀 Start Extraction", type="primary"):
@@ -293,7 +283,7 @@ if st.session_state['scraped_results']:
     
     df = pd.DataFrame(export_rows)
     
-    # Final Column Ordering
+    # Final Column Ordering (As requested)
     desired_order = ['Seller Name', 'SKU', 'Product Name', 'Brand', 'Category', 'Image URL', ' ', 'Express', 'Input Source']
     final_cols = [c for c in desired_order if c in df.columns]
     df = df[final_cols]
