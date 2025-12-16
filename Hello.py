@@ -11,26 +11,42 @@ import pandas as pd
 import re
 import time
 
-# --- PAGE CONFIGURATION (White-Labeled) ---
-st.set_page_config(page_title="Marketplace Data Tool", page_icon="📊", layout="wide")
+# --- PAGE CONFIGURATION ---
+st.set_page_config(page_title="Jumia Catalog Selector", page_icon="🛒", layout="wide")
+st.title("🛒 Jumia Catalog Selector (V9.0)")
+st.markdown("Step 1: Paste a category URL to load products. Step 2: Select items. Step 3: Process.")
 
-st.title("🛒 E-Commerce Data Extractor")
-st.markdown("Batch process **Product URLs** or **SKUs** from Excel/Text.")
+# --- Custom CSS for Card Styling ---
+st.markdown("""
+<style>
+    [data-testid="stImage"] {
+        border-radius: 8px;
+        overflow: hidden;
+    }
+    .sku-label {
+        background-color: #333;
+        color: white;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 0.8em;
+        font-weight: bold;
+        display: inline-block;
+        margin-bottom: 5px;
+    }
+    .product-name {
+        font-size: 0.9em;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: block;
+    }
+    /* Tighten up vertical spacing in grid */
+    div[data-testid="column"] > div > div > div {
+        gap: 0.5rem;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-# --- SIDEBAR: CONFIGURATION ---
-with st.sidebar:
-    st.header("⚙️ Settings")
-    
-    # Generic Labels for Regions
-    region_choice = st.selectbox(
-        "Select Region:",
-        ("Region 1 (KE)", "Region 2 (UG)")
-    )
-    # Map selection to actual domains internally
-    domain = "jumia.co.ke" if "KE" in region_choice else "jumia.ug"
-    
-    st.markdown("---")
-    show_browser = st.checkbox("Show Browser (Debug Mode)", value=False)
 
 # --- 1. DRIVER SETUP ---
 @st.cache_resource
@@ -39,267 +55,183 @@ def install_driver():
 
 def get_driver():
     chrome_options = Options()
-    if not show_browser:
-        chrome_options.add_argument("--headless=new") 
-    
-    # Stability Arguments
+    chrome_options.add_argument("--headless=new") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
     chrome_options.add_argument("--window-size=1920,1080")
     chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
     try:
         service = Service(install_driver())
         driver = webdriver.Chrome(service=service, options=chrome_options)
-    except Exception:
-        try:
-            # Server/Cloud Fallback
-            chrome_options.binary_location = "/usr/bin/chromium"
-            service = Service("/usr/bin/chromedriver")
-            driver = webdriver.Chrome(service=service, options=chrome_options)
-        except Exception:
-            return None
-
-    if driver:
         driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-    return driver
+        return driver
+    except Exception as e:
+        st.error(f"Driver Error: {e}")
+        return None
 
-# --- 2. SMART INPUT PROCESSING ---
-def process_inputs(text_input, file_input, default_domain):
-    """
-    Intelligently sorts inputs into URLs or SKUs.
-    """
-    raw_items = set()
-    
-    # 1. Process Text Box (Split by newlines, commas, or spaces)
-    if text_input:
-        items = re.split(r'[\n,]', text_input) # Split by newlines or commas
-        for i in items:
-            clean_item = i.strip()
-            if clean_item: raw_items.add(clean_item)
-            
-    # 2. Process Excel/CSV Upload
-    if file_input:
-        try:
-            if file_input.name.endswith('.xlsx'):
-                df = pd.read_excel(file_input, header=None)
-            else:
-                df = pd.read_csv(file_input, header=None)
-            
-            # Flatten entire sheet to find data
-            for cell in df.values.flatten():
-                cell_str = str(cell).strip()
-                if cell_str and cell_str.lower() != 'nan':
-                    raw_items.add(cell_str)
-        except Exception as e:
-            st.error(f"Error reading file: {e}")
-
-    final_targets = []
-    
-    for item in raw_items:
-        # CLEANUP: Remove common prefixes users might paste
-        clean_val = item.replace("SKU:", "").replace("sku:", "").strip()
-        
-        # LOGIC: 
-        # If it contains "http" or "www." -> It's a URL
-        if "http" in clean_val or "www." in clean_val:
-            if not clean_val.startswith("http"): clean_val = "https://" + clean_val
-            final_targets.append({"type": "url", "value": clean_val})
-            
-        # If it is alphanumeric and NOT a URL -> It's a SKU
-        elif len(clean_val) > 3: 
-            # Construct search URL internally
-            search_url = f"https://www.{default_domain}/catalog/?q={clean_val}"
-            final_targets.append({"type": "sku", "value": search_url, "original_sku": clean_val})
-            
-    return final_targets
-
-# --- 3. SCRAPING ENGINE ---
-def scrape_item(target):
+# --- 2. CATALOG PAGE SCRAPER ---
+def scrape_catalog_page(url):
+    """Scrapes basic info from a grid of products on a category page."""
     driver = get_driver()
-    if not driver: return {'Product Name': 'SYSTEM_ERROR'}
-
-    url = target['value']
-    is_sku_search = target['type'] == 'sku'
+    if not driver: return []
     
-    data = {
-        'Input Source': target.get('original_sku', url),
-        'Product Name': 'N/A', 
-        'Brand': 'N/A', 
-        'Seller Name': 'N/A', 
-        'Category': 'N/A', 
-        'SKU': 'N/A', 
-        'Image URLs': [], 
-        ' ': '',  # THE BLANK COLUMN
-        'Express': 'No'
-    }
-
+    products_found = []
     try:
         driver.get(url)
-        
-        # --- SKU SEARCH HANDLING ---
-        if is_sku_search:
-            try:
-                # Wait for either a product list OR a direct product page
-                WebDriverWait(driver, 8).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "article.prd, h1"))
-                )
-                
-                # Check if "No results found"
-                if "There are no results for" in driver.page_source:
-                    data['Product Name'] = "SKU_NOT_FOUND"
-                    driver.quit()
-                    return data
+        # Wait for product articles to load
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "article.prd"))
+        )
+        # Scroll down a bit to trigger lazy loading images
+        driver.execute_script("window.scrollTo(0, 1000);")
+        time.sleep(2)
+        driver.execute_script("window.scrollTo(0, 2000);")
+        time.sleep(2)
 
-                # If we are on a list page (found 'article.prd'), click the first item
-                product_links = driver.find_elements(By.CSS_SELECTOR, "article.prd a.core")
-                if product_links:
-                    first_link = product_links[0].get_attribute("href")
-                    driver.get(first_link) # Go to product page
-                # If 'article.prd' is missing but 'h1' exists, we might have been auto-redirected.
-                    
-            except Exception:
-                pass
-
-        # --- PRODUCT PAGE SCRAPING ---
-        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "h1")))
-        
-        # Scroll to trigger lazy loading
-        driver.execute_script("window.scrollTo(0, 600);")
-        time.sleep(1.5)
-        
         soup = BeautifulSoup(driver.page_source, 'html.parser')
-
-        # 1. Product Name
-        h1 = soup.find('h1')
-        data['Product Name'] = h1.text.strip() if h1 else "N/A"
-
-        # 2. Brand
-        brand_label = soup.find(string=re.compile(r"Brand:\s*"))
-        if brand_label and brand_label.parent:
-            brand_link = brand_label.parent.find('a')
-            if brand_link:
-                data['Brand'] = brand_link.text.strip()
-            else:
-                txt = brand_label.parent.get_text().replace('Brand:', '').strip()
-                data['Brand'] = txt.split('|')[0].strip()
         
-        if data['Brand'] in ["N/A", ""] or "generic" in data['Brand'].lower():
-             data['Brand'] = data['Product Name'].split()[0]
-
-        # 3. Seller
-        seller_box = soup.select_one('div.-hr.-pas, div.seller-details')
-        if seller_box:
-            p_tag = seller_box.find('p', class_='-m')
-            if p_tag: data['Seller Name'] = p_tag.text.strip()
+        # Find all product cards
+        cards = soup.find_all('article', class_='prd')
         
-        if any(x in data['Seller Name'].lower() for x in ['details', 'follow', 'sell on', 'n/a']):
-             data['Seller Name'] = "N/A"
+        for card in cards:
+            try:
+                # A. Get Link and extract generic SKU from it
+                link_tag = card.find('a', class_='core')
+                if not link_tag: continue
+                product_url = link_tag.get('href')
+                if product_url.startswith('/'): product_url = "https://www.jumia.co.ke" + product_url
 
-        # 4. Category
-        breadcrumbs = soup.select('.osh-breadcrumb a, .brcbs a')
-        cats = [b.text.strip() for b in breadcrumbs if b.text.strip()]
-        data['Category'] = cats[1] if len(cats) > 1 else (cats[0] if cats else "N/A")
+                # Extract SKU from URL (e.g., ...-AC12345.html -> AC12345)
+                sku_match = re.search(r'-([A-Z0-9]+)\.html', product_url)
+                sku = sku_match.group(1) if sku_match else "N/A"
 
-        # 5. SKU (Actual Product SKU)
-        sku_match = re.search(r'SKU[:\s]*([A-Z0-9\-]+)', soup.get_text())
-        if sku_match: data['SKU'] = sku_match.group(1)
-        elif is_sku_search: data['SKU'] = target['original_sku'] 
-
-        # 6. Images
-        for img in soup.find_all('img'):
-            src = img.get('data-src') or img.get('src')
-            if src and '/product/' in src:
-                if src.startswith('//'): src = 'https:' + src
-                if src not in data['Image URLs']: data['Image URLs'].append(src)
-
-        # 7. Express Detection (Internal Logic)
-        express_svg = soup.find('svg', attrs={'aria-label': 'Jumia Express'})
-        if express_svg:
-            data['Express'] = "Yes"
-
+                # B. Get Image
+                img_tag = card.find('img')
+                img_url = img_tag.get('data-src') or img_tag.get('src')
+                
+                # C. Get Name
+                name_tag = card.find('h3', class_='name')
+                name = name_tag.text.strip() if name_tag else "Unknown Product"
+                
+                if img_url and sku != "N/A":
+                    products_found.append({
+                        'sku': sku,
+                        'name': name,
+                        'image': img_url,
+                        'url': product_url
+                    })
+            except Exception:
+                continue
+                
     except Exception as e:
-        data['Product Name'] = "ERROR_FETCHING"
+        st.error(f"Error loading catalog: {e}")
     finally:
         driver.quit()
-        
-    return data
+    
+    return products_found
 
 # --- MAIN APP LOGIC ---
 
-if 'scraped_results' not in st.session_state:
-    st.session_state['scraped_results'] = []
+# Initialize Session State
+if 'catalog_items' not in st.session_state:
+    st.session_state['catalog_items'] = []
+if 'selected_urls' not in st.session_state:
+    st.session_state['selected_urls'] = []
 
-col_txt, col_upl = st.columns(2)
-with col_txt:
-    text_in = st.text_area("Paste SKUs or Links (one per line):", height=150)
-with col_upl:
-    file_in = st.file_uploader("Upload Excel/CSV:", type=['xlsx', 'csv'])
-    st.caption("Upload any file containing SKUs or Links in any cell.")
+# STEP 1: INPUT URL
+st.header("1. Fetch Product List")
+catalog_url = st.text_input("Paste Category or Search Result URL:", placeholder="https://www.jumia.co.ke/televisions/")
 
-btn_col, _ = st.columns([1, 4])
-if btn_col.button("🚀 Start Extraction", type="primary"):
-    
-    # Process inputs based on selected domain
-    targets = process_inputs(text_in, file_in, domain)
-    
-    if not targets:
-        st.warning("No valid data found. Please check your inputs.")
+if st.button("Fetch Products", type="primary"):
+    if "jumia" not in catalog_url:
+        st.error("Please enter a valid Jumia URL.")
     else:
-        st.info(f"Queued {len(targets)} items for processing...")
-        st.session_state['scraped_results'] = []
-        
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        for i, target in enumerate(targets):
-            display_name = target.get('original_sku', 'Link')
-            status_text.text(f"Processing {i+1}/{len(targets)}: {display_name}")
-            
-            result = scrape_item(target)
-            
-            if result and result['Product Name'] not in ["SYSTEM_ERROR", "SKU_NOT_FOUND"]:
-                st.session_state['scraped_results'].append(result)
-            
-            progress_bar.progress((i + 1) / len(targets))
-            
-        status_text.success("Batch processing complete!")
-        time.sleep(1)
-        st.rerun()
+        with st.spinner("Fetching products from page..."):
+            # Clear previous states
+            st.session_state['catalog_items'] = []
+            st.session_state['selected_urls'] = []
+            # Scrape
+            items = scrape_catalog_page(catalog_url)
+            if items:
+                st.session_state['catalog_items'] = items
+                st.success(f"Found {len(items)} products!")
+            else:
+                st.warning("No products found on this page.")
 
-# --- RESULT TABLE ---
-if st.session_state['scraped_results']:
+# STEP 2: DISPLAY Grid & Selections
+if st.session_state['catalog_items']:
     st.markdown("---")
-    st.subheader("📊 Extracted Data")
-
-    # Clean up for display
-    export_rows = []
-    for item in st.session_state['scraped_results']:
-        row = item.copy()
-        row['Image URL'] = row['Image URLs'][0] if row['Image URLs'] else "N/A"
-        del row['Image URLs']
-        export_rows.append(row)
+    st.header("2. Select Products")
+    st.caption("Tick the checkboxes of the products you want to investigate further.")
     
-    df = pd.DataFrame(export_rows)
+    items = st.session_state['catalog_items']
     
-    # Final Column Ordering (As requested)
-    desired_order = ['Seller Name', 'SKU', 'Product Name', 'Brand', 'Category', 'Image URL', ' ', 'Express', 'Input Source']
-    final_cols = [c for c in desired_order if c in df.columns]
-    df = df[final_cols]
+    # Grid Layout Parameters
+    COLS_PER_ROW = 5
+    
+    # Create chunks for grid rows
+    for i in range(0, len(items), COLS_PER_ROW):
+        row_items = items[i:i+COLS_PER_ROW]
+        cols = st.columns(COLS_PER_ROW)
+        
+        for j, col in enumerate(cols):
+            if j < len(row_items):
+                item = row_items[j]
+                with col:
+                    # 1. Display Image
+                    st.image(item['image'], use_container_width=True)
+                    
+                    # 2. Display SKU (styled like a label using HTML)
+                    st.markdown(f'<div class="sku-label">{item["sku"]}</div>', unsafe_allow_html=True)
+                    
+                    # 3. Selection Checkbox with Name truncated
+                    # We use the SKU as the unique key for the checkbox state
+                    is_checked = st.checkbox(
+                        label=item['name'], # Display full name next to checkbox
+                        key=f"select_{item['sku']}" # Unique ID for Streamlit state
+                    )
 
-    st.dataframe(df, use_container_width=True)
 
-    # Download Button
-    csv_data = df.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="📥 Download Results (CSV)",
-        data=csv_data,
-        file_name="marketplace_data.csv",
-        mime="text/csv",
-        type="primary"
-    )
+# STEP 3: PROCESS SELECTION
+st.markdown("---")
+st.header("3. Process Selected")
 
-    if st.button("Clear Data"):
-        st.session_state['scraped_results'] = []
+# A hidden container that only shows when items are selected
+results_container = st.container()
+
+if st.button("Generate List of Selected URLs", type="primary"):
+    selected_links = []
+    
+    # Iterate through scraped items and check their corresponding checkbox state
+    for item in st.session_state['catalog_items']:
+        checkbox_key = f"select_{item['sku']}"
+        # Check if the checkbox with this key exists in session state and is True
+        if st.session_state.get(checkbox_key, False):
+            selected_links.append({
+                'SKU': item['sku'],
+                'Product Name': item['name'],
+                'Product URL': item['url']
+            })
+            
+    st.session_state['selected_urls'] = selected_links
+
+# Display results if they exist
+if st.session_state['selected_urls']:
+    with results_container:
+        st.success(f"You selected {len(st.session_state['selected_urls'])} items.")
+        
+        df_selected = pd.DataFrame(st.session_state['selected_urls'])
+        st.dataframe(df_selected, use_container_width=True)
+
+        # Prepare text list for easy copying to the main scraper
+        url_list_text = "\n".join([d['Product URL'] for d in st.session_state['selected_urls']])
+        st.text_area("Copy these URLs for the main scraper:", value=url_list_text, height=200)
+
+    # Alternative: Button to clear selection
+    if st.button("Clear Selection"):
+        # Reset checkbox states
+        for item in st.session_state['catalog_items']:
+             st.session_state[f"select_{item['sku']}"] = False
+        st.session_state['selected_urls'] = []
         st.rerun()
