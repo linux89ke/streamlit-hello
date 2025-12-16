@@ -190,4 +190,45 @@ def scrape_item(target):
             data['Express'] = "Yes"
 
     except Exception:
-        data['
+        data['Product Name'] = "ERROR_FETCHING"
+    finally:
+        driver.quit()
+    return data
+
+# --- MAIN APP ---
+if 'scraped_results' not in st.session_state: st.session_state['scraped_results'] = []
+
+col_txt, col_upl = st.columns(2)
+with col_txt: text_in = st.text_area("Paste SKUs/Links:", height=150)
+with col_upl: file_in = st.file_uploader("Upload Excel/CSV:", type=['xlsx', 'csv'])
+
+if st.button("🚀 Start Extraction", type="primary"):
+    targets = process_inputs(text_in, file_in, domain)
+    if not targets:
+        st.warning("No valid data found.")
+    else:
+        st.session_state['scraped_results'] = []
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        for i, target in enumerate(targets):
+            status_text.text(f"Processing {i+1}/{len(targets)}: {target.get('original_sku', 'Link')}")
+            result = scrape_item(target)
+            if result and result['Product Name'] not in ["SYSTEM_ERROR", "SKU_NOT_FOUND"]:
+                st.session_state['scraped_results'].append(result)
+            progress_bar.progress((i + 1) / len(targets))
+        status_text.success("Done!")
+        st.rerun()
+
+if st.session_state['scraped_results']:
+    st.markdown("---")
+    export_rows = []
+    for item in st.session_state['scraped_results']:
+        row = item.copy()
+        row['Image URL'] = row['Image URLs'][0] if row['Image URLs'] else "N/A"
+        del row['Image URLs']
+        export_rows.append(row)
+    df = pd.DataFrame(export_rows)
+    cols = ['Seller Name', 'SKU', 'Product Name', 'Brand', 'Category', 'Image URL', ' ', 'Express', 'Input Source']
+    df = df[[c for c in cols if c in df.columns]]
+    st.dataframe(df, use_container_width=True)
+    st.download_button("📥 Download CSV", df.to_csv(index=False).encode('utf-8'), "data.csv", "text/csv")
