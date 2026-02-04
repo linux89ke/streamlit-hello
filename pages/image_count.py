@@ -11,12 +11,12 @@ from webdriver_manager.core.os_manager import ChromeType
 import pandas as pd
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Jumia Deep Data Tool", page_icon="🛡️", layout="wide")
-st.title("🛡️ Jumia Deep Data Extractor (Ordered)")
-st.markdown("Extracts **Actual Warranty** and **All Images** in the exact order of your input.")
+st.set_page_config(page_title="Real-Time Jumia Extractor", page_icon="🛡️", layout="wide")
+st.title("🛡️ Real-Time Jumia Deep Data Extractor")
+st.markdown("Results will appear below in **real-time** as they are scraped.")
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -24,7 +24,7 @@ with st.sidebar:
     region_choice = st.selectbox("Select Region:", ("Kenya (KE)", "Uganda (UG)"))
     domain = "jumia.co.ke" if "KE" in region_choice else "jumia.ug"
     st.markdown("---")
-    max_workers = st.slider("Parallel Workers:", 1, 5, 2)
+    max_workers = st.slider("Parallel Workers:", 1, 5, 3)
     timeout_seconds = st.slider("Page Timeout:", 10, 45, 25)
 
 # --- 1. DRIVER SETUP ---
@@ -55,15 +55,13 @@ def get_driver(timeout=25):
 
 # --- 2. EXTRACTION LOGIC ---
 def extract_product_data(soup, data):
-    # A. Product Name
     h1 = soup.find('h1')
     data['Product Name'] = h1.text.strip() if h1 else "N/A"
 
-    # B. Warranty Filter (Fixing "Warranty Address" issue)
+    # Warranty Filter
     found_warranty = "No Warranty Listed"
     elements = soup.find_all(['li', 'td', 'span', 'p'], string=re.compile(r'warranty', re.IGNORECASE))
     labels_to_skip = ["warranty address", "warranty type", "warranty card", "warranty:"]
-    
     for el in elements:
         text = el.get_text().strip()
         if any(label in text.lower() for label in labels_to_skip) and len(text) < 25:
@@ -73,11 +71,10 @@ def extract_product_data(soup, data):
             break
     data['Warranty'] = found_warranty
 
-    # C. Image Gallery (Fixing Zero Images issue)
+    # Image Gallery (Lazy-load fix)
     img_links = []
     gallery = soup.find('div', id='product-galleries') or soup.find('div', class_='-ps-rel')
     target_tags = gallery.find_all('img') if gallery else soup.find_all('img')
-    
     for img in target_tags:
         url = img.get('data-src') or img.get('src')
         if url and '/product/' in url:
@@ -88,18 +85,22 @@ def extract_product_data(soup, data):
 
     data['Image Count'] = len(img_links)
     data['All Image Links'] = " | ".join(img_links)
-    
-    # D. SKU
     sku_match = re.search(r'SKU[:\s]*([A-Z0-9\-]+)', soup.get_text())
     if sku_match: data['SKU'] = sku_match.group(1)
     return data
 
 # --- 3. SCRAPING ENGINE ---
-def scrape_item(target):
-    timeout = 25 # Default timeout
-    driver = get_driver(timeout)
+def scrape_item(index, target):
+    driver = get_driver(25)
     url = target['value']
-    data = {'Input': target.get('original_sku', url), 'Product Name': 'Pending', 'Warranty': 'N/A', 'Image Count': 0}
+    data = {
+        'order_index': index, # Used to sort back to original order
+        'Input': target.get('original_sku', url), 
+        'Product Name': 'Pending', 
+        'Warranty': 'N/A', 
+        'Image Count': 0,
+        'SKU': 'N/A'
+    }
 
     if not driver:
         data['Product Name'] = 'DRIVER_ERROR'
@@ -111,7 +112,6 @@ def scrape_item(target):
             first_prod = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "article.prd a.core")))
             driver.get(first_prod.get_attribute("href"))
 
-        # TRIGGER LAZY LOADS
         driver.execute_script("window.scrollTo(0, 600);")
         time.sleep(2) 
         
@@ -127,34 +127,48 @@ def scrape_item(target):
 # --- 4. MAIN INTERFACE ---
 input_text = st.text_area("Paste URLs or SKUs (One per line):", height=150)
 
-if st.button("🚀 Start Ordered Extraction", type="primary"):
-    # Split input while maintaining order
+if st.button("🚀 Start Real-Time Extraction", type="primary"):
     raw_inputs = [i.strip() for i in input_text.split('\n') if i.strip()]
-    
     targets = []
-    for i in raw_inputs:
+    for idx, i in enumerate(raw_inputs):
         if "http" in i:
-            targets.append({"type": "url", "value": i})
+            targets.append({"index": idx, "type": "url", "value": i})
         else:
-            targets.append({"type": "sku", "value": f"https://www.{domain}/catalog/?q={i}", "original_sku": i})
+            targets.append({"index": idx, "type": "sku", "value": f"https://www.{domain}/catalog/?q={i}", "original_sku": i})
 
     if targets:
-        status_box = st.empty()
-        status_box.info(f"Processing {len(targets)} items in order...")
+        # UI Placeholders
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        table_placeholder = st.empty()
         
-        # Use ThreadPoolExecutor with map to maintain order
+        results_list = []
+        
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # list(executor.map(...)) ensures the results are returned in the order of the 'targets' list
-            results = list(executor.map(scrape_item, targets))
+            # Map index to the task
+            future_to_item = {executor.submit(scrape_item, t['index'], t): t for t in targets}
+            
+            completed = 0
+            for future in as_completed(future_to_item):
+                result = future.result()
+                results_list.append(result)
+                
+                completed += 1
+                progress = completed / len(targets)
+                
+                # Update Progress
+                progress_bar.progress(progress)
+                status_text.text(f"Processed {completed}/{len(targets)} items...")
+                
+                # Sort current results by order_index to keep UI tidy
+                current_df = pd.DataFrame(results_list).sort_values('order_index').drop(columns=['order_index'])
+                table_placeholder.dataframe(current_df, use_container_width=True)
 
-        status_box.success("Processing complete!")
-        df_final = pd.DataFrame(results)
+        status_text.success(f"✅ Finished! Processed {len(targets)} items.")
         
-        # Display results in the UI
-        st.dataframe(df_final, use_container_width=True)
-        
-        # Download button
-        csv = df_final.to_csv(index=False).encode('utf-8')
-        st.download_button("📥 Download Ordered CSV", csv, "jumia_ordered_data.csv", "text/csv")
+        # Final Sorted DataFrame for download
+        final_df = pd.DataFrame(results_list).sort_values('order_index').drop(columns=['order_index'])
+        csv = final_df.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Download Final Ordered CSV", csv, "jumia_realtime_data.csv", "text/csv")
     else:
         st.warning("No valid inputs found.")
