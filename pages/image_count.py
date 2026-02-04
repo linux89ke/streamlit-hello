@@ -14,8 +14,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Jumia Tool V11", page_icon="📊", layout="wide")
-st.title("🛒 Jumia Data Extractor (Ordered & Real-Time)")
+st.set_page_config(page_title="Real-Time Jumia Extractor", page_icon="🛡️", layout="wide")
+st.title("🛡️ Jumia Deep Data Extractor (Real-Time & Ordered)")
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -26,11 +26,12 @@ with st.sidebar:
     max_workers = st.slider("Parallel Workers:", 1, 5, 3)
     timeout_seconds = st.slider("Page Timeout:", 10, 45, 25)
 
+# --- 1. DRIVER SETUP ---
 @st.cache_resource
 def get_driver_path():
     try:
         return ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install()
-    except:
+    except Exception:
         return ChromeDriverManager().install()
 
 def get_chrome_options():
@@ -38,7 +39,9 @@ def get_chrome_options():
     chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1920,1080")
+    # CRITICAL: We DO NOT disable images here, otherwise lazy-load scripts often fail to trigger image URLs
     chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     return chrome_options
 
@@ -48,57 +51,70 @@ def get_driver(timeout=25):
         driver = webdriver.Chrome(service=service, options=get_chrome_options())
         driver.set_page_load_timeout(timeout)
         return driver
-    except:
+    except Exception:
         return None
 
-# --- EXTRACTION LOGIC ---
+# --- 2. EXTRACTION LOGIC ---
 def extract_product_data(soup, data):
     # 1. Product Name
     h1 = soup.find('h1')
     data['Product Name'] = h1.text.strip() if h1 else "N/A"
 
-    # 2. Warranty (Filtered to avoid generic "Warranty Address")
-    found_warranty = "No Warranty Listed"
+    # 2. Warranty (Filtered to avoid generic "Warranty Address" labels)
+    warranty_info = "No Warranty Listed"
     elements = soup.find_all(['li', 'td', 'span', 'p'], string=re.compile(r'warranty', re.IGNORECASE))
     labels_to_skip = ["warranty address", "warranty type", "warranty card", "warranty:"]
+    
     for el in elements:
         text = el.get_text().strip()
         if any(label in text.lower() for label in labels_to_skip) and len(text) < 25:
             continue
         if len(text) < 120:
-            found_warranty = text
+            warranty_info = text
             break
-    data['Warranty'] = found_warranty
-
-    # 3. Image Gallery Fix (Targeted to avoid high counts)
-    img_links = []
-    # We target ONLY the main product image container
-    gallery_container = soup.select_one('div#product-galleries, div.-ps-rel, div#main-image')
     
-    if gallery_container:
-        # We search for images specifically within the gallery
-        for img in gallery_container.find_all('img'):
-            # data-src is used by Jumia for lazy loading; src is the backup
-            url = img.get('data-src') or img.get('src')
-            if url and '/product/' in url:
-                if url.startswith('//'): url = 'https:' + url
-                # Strip Jumia image resizing filters to get original quality
-                clean_url = re.sub(r'filters:format\(.*?\)/', '', url)
-                if clean_url not in img_links:
-                    img_links.append(clean_url)
+    if warranty_info == "No Warranty Listed":
+        match = re.search(r'(\d+\s*(?:month|year|day)s?\s+(?:manufacturer\s+)?warranty)', soup.get_text(), re.IGNORECASE)
+        if match:
+            warranty_info = match.group(1)
+    data['Warranty'] = warranty_info
+
+    # 3. All Image Links (Specific Container Targeting)
+    img_links = []
+    gallery = soup.find('div', id='product-galleries') or soup.find('div', class_='-ps-rel')
+    target_tags = gallery.find_all('img') if gallery else soup.find_all('img')
+    
+    for img in target_tags:
+        url = img.get('data-src') or img.get('src')
+        if url and '/product/' in url:
+            if url.startswith('//'): url = 'https:' + url
+            # Remove resize filters to get high-res original
+            clean_url = re.sub(r'filters:format\(.*?\)/', '', url)
+            if clean_url not in img_links:
+                img_links.append(clean_url)
 
     data['Image Count'] = len(img_links)
     data['All Image Links'] = " | ".join(img_links)
     
+    # 4. SKU
     sku_match = re.search(r'SKU[:\s]*([A-Z0-9\-]+)', soup.get_text())
     if sku_match: data['SKU'] = sku_match.group(1)
+
     return data
 
-# --- SCRAPING ENGINE ---
-def scrape_item(index, target):
-    driver = get_driver(25)
+# --- 3. SCRAPING ENGINE ---
+def scrape_item(index, target, timeout):
+    driver = get_driver(timeout)
     url = target['value']
-    data = {'order_index': index, 'Input': target.get('original_sku', url), 'Product Name': 'Pending', 'Warranty': 'N/A', 'Image Count': 0}
+    data = {
+        'order_index': index,
+        'Input': target.get('original_sku', url),
+        'Product Name': 'Pending',
+        'SKU': 'N/A',
+        'Warranty': 'N/A',
+        'Image Count': 0,
+        'All Image Links': ''
+    }
 
     if not driver:
         data['Product Name'] = 'DRIVER_ERROR'
@@ -107,54 +123,72 @@ def scrape_item(index, target):
     try:
         driver.get(url)
         if target['type'] == 'sku':
-            # Handle search page to get to the product page
-            first_prod = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "article.prd a.core")))
+            first_prod = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "article.prd a.core"))
+            )
             driver.get(first_prod.get_attribute("href"))
 
-        # --- THE FIX FOR ZERO IMAGES ---
-        # Scroll down slightly to trigger Jumia's lazy-load JavaScript
-        driver.execute_script("window.scrollTo(0, 400);")
-        time.sleep(1.5) # Wait for images to swap from placeholder to real URL
+        # TRIGGER LAZY LOADS: Scroll and short wait
+        driver.execute_script("window.scrollTo(0, 500);")
+        time.sleep(1.5) 
         
         WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "h1")))
         soup = BeautifulSoup(driver.page_source, 'html.parser')
         data = extract_product_data(soup, data)
     except Exception as e:
-        data['Product Name'] = f"FAILED: {str(e)[:20]}"
+        data['Product Name'] = f"FAILED: {str(e)[:25]}"
     finally:
         driver.quit()
     return data
 
-# --- INTERFACE ---
-input_text = st.text_area("Paste URLs or SKUs:", height=150)
+# --- 4. MAIN INTERFACE ---
+col1, col2 = st.columns(2)
+with col1:
+    input_text = st.text_area("Paste URLs or SKUs (One per line):", height=150)
+with col2:
+    input_file = st.file_uploader("Or Upload File:", type=['csv', 'xlsx'])
 
-if st.button("🚀 Start Real-Time Extraction"):
-    raw_inputs = [i.strip() for i in input_text.split('\n') if i.strip()]
+if st.button("🚀 Start Real-Time Extraction", type="primary"):
+    raw_inputs = []
+    if input_text:
+        raw_inputs.extend([i.strip() for i in input_text.split('\n') if i.strip()])
+    if input_file:
+        try:
+            df_file = pd.read_excel(input_file, header=None) if input_file.name.endswith('.xlsx') else pd.read_csv(input_file, header=None)
+            raw_inputs.extend(df_file.iloc[:,0].astype(str).tolist())
+        except: st.error("File error.")
+
     targets = []
-    for idx, i in enumerate(raw_inputs):
-        if "http" in i:
-            targets.append({"index": idx, "type": "url", "value": i})
+    for idx, item in enumerate(raw_inputs):
+        if "http" in item:
+            targets.append({"index": idx, "type": "url", "value": item})
         else:
-            targets.append({"index": idx, "type": "sku", "value": f"https://www.{domain}/catalog/?q={i}", "original_sku": i})
+            targets.append({"index": idx, "type": "sku", "value": f"https://www.{domain}/catalog/?q={item}", "original_sku": item})
 
     if targets:
         progress_bar = st.progress(0)
+        status_text = st.empty()
         table_placeholder = st.empty()
         results_list = []
         
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_item = {executor.submit(scrape_item, t['index'], t): t for t in targets}
+            future_to_item = {executor.submit(scrape_item, t['index'], t, timeout_seconds): t for t in targets}
             
             completed = 0
             for future in as_completed(future_to_item):
                 results_list.append(future.result())
                 completed += 1
                 progress_bar.progress(completed / len(targets))
+                status_text.text(f"Processed {completed}/{len(targets)} items...")
                 
-                # Update UI in real-time, kept in original order
+                # Real-time update: Sort by original index so it doesn't jump around
                 current_df = pd.DataFrame(results_list).sort_values('order_index').drop(columns=['order_index'])
                 table_placeholder.dataframe(current_df, use_container_width=True)
 
+        status_text.success(f"✅ Finished! Processed {len(targets)} items.")
+        
         final_df = pd.DataFrame(results_list).sort_values('order_index').drop(columns=['order_index'])
         csv = final_df.to_csv(index=False).encode('utf-8')
-        st.download_button("📥 Download Final CSV", csv, "jumia_data.csv", "text/csv")
+        st.download_button("📥 Download Final Report", csv, "jumia_realtime_results.csv", "text/csv")
+    else:
+        st.warning("No valid inputs found.")
