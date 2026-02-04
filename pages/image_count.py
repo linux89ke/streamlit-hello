@@ -16,8 +16,8 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Jumia Warranty & Image Tool", page_icon="🛡️", layout="wide")
-st.title("🛡️ Jumia Product Detail Extractor")
+st.set_page_config(page_title="Image count Tool", page_icon="🛡️", layout="wide")
+st.title("Detail Extractor")
 st.markdown("Extracts **Warranty Information** and **All Gallery Images** from Jumia products.")
 
 # --- SIDEBAR ---
