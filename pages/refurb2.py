@@ -785,8 +785,11 @@ if st.button("🚀 Start Refurbished Product Analysis", type="primary"):
         st.session_state['scraped_results'] = []
         st.session_state['failed_items'] = []
         
+        # Create progress UI elements
         progress_bar = st.progress(0)
         status_text = st.empty()
+        progress_details = st.empty()
+        current_item_display = st.empty()
         
         status_text.text(f"🔄 Analyzing {len(targets)} products for refurbished attributes...")
         start_time = time.time()
@@ -794,21 +797,59 @@ if st.button("🚀 Start Refurbished Product Analysis", type="primary"):
         batch_size = max_workers * 2
         all_results = []
         all_failed = []
+        processed_count = 0
         
         for i in range(0, len(targets), batch_size):
             batch = targets[i:i + batch_size]
+            batch_start = time.time()
+            
+            # Show batch info
+            batch_num = (i // batch_size) + 1
+            total_batches = (len(targets) + batch_size - 1) // batch_size
+            progress_details.info(
+                f"📦 Processing batch {batch_num}/{total_batches} "
+                f"({len(batch)} items)"
+            )
+            
             batch_results, batch_failed = scrape_items_parallel(
                 batch, max_workers, not show_browser, timeout_seconds, check_images
             )
             
             all_results.extend(batch_results)
             all_failed.extend(batch_failed)
+            processed_count += len(batch)
             
-            progress = min((i + len(batch)) / len(targets), 1.0)
+            # Update progress
+            progress = min(processed_count / len(targets), 1.0)
             progress_bar.progress(progress)
+            
+            # Calculate stats
+            elapsed = time.time() - start_time
+            avg_time = elapsed / processed_count if processed_count > 0 else 0
+            remaining = (len(targets) - processed_count) * avg_time
+            
             status_text.text(
-                f"🔄 Processed {min(i + len(batch), len(targets))}/{len(targets)} items..."
+                f"🔄 Processed {processed_count}/{len(targets)} items "
+                f"({processed_count/elapsed:.1f} items/sec) • "
+                f"⏱️ Est. remaining: {remaining:.0f}s"
             )
+            
+            # Show last processed item with image if available
+            if batch_results:
+                last_item = batch_results[-1]
+                with current_item_display.container():
+                    col1, col2 = st.columns([1, 3])
+                    with col1:
+                        if last_item.get('Primary Image URL') and last_item['Primary Image URL'] != 'N/A':
+                            try:
+                                st.image(last_item['Primary Image URL'], width=150)
+                            except:
+                                st.write("🖼️ Image")
+                    with col2:
+                        st.caption(f"**Last processed:** {last_item.get('Product Name', 'N/A')[:60]}...")
+                        refurb_icon = "✅" if last_item.get('Is Refurbished') == 'YES' else "❌"
+                        warranty_icon = "✅" if last_item.get('Has Warranty') == 'YES' else "❌"
+                        st.caption(f"Refurbished: {refurb_icon} | Warranty: {warranty_icon} | Brand: {last_item.get('Brand', 'N/A')}")
         
         elapsed = time.time() - start_time
         st.session_state['scraped_results'] = all_results
@@ -817,10 +858,14 @@ if st.button("🚀 Start Refurbished Product Analysis", type="primary"):
         success_count = len(all_results)
         failed_count = len(all_failed)
         
+        # Clear progress UI
+        progress_details.empty()
+        current_item_display.empty()
+        
         if failed_count > 0:
             status_text.warning(
                 f"⚠️ Completed with issues: {success_count} successful, {failed_count} failed "
-                f"({elapsed:.1f}s)"
+                f"({elapsed:.1f}s • {len(targets)/elapsed:.1f} items/sec)"
             )
         else:
             status_text.success(
@@ -828,7 +873,7 @@ if st.button("🚀 Start Refurbished Product Analysis", type="primary"):
                 f"({len(targets)/elapsed:.1f} items/sec)"
             )
         
-        time.sleep(1)
+        time.sleep(2)
         st.rerun()
 
 # --- DISPLAY RESULTS ---
@@ -878,13 +923,123 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
             express_count = (df['Express'] == 'Yes').sum()
             st.metric("⚡ Express Items", express_count)
         
+        # Image Gallery View
+        st.markdown("---")
+        st.subheader("🖼️ Product Gallery")
+        
+        # Display options
+        col_gallery, col_filter = st.columns([3, 1])
+        with col_filter:
+            view_mode = st.radio("View:", ["Grid", "List"], horizontal=True)
+            show_refurb_only = st.checkbox("Refurbished only", value=False)
+        
+        # Filter dataframe if needed
+        display_df = df[df['Is Refurbished'] == 'YES'] if show_refurb_only else df
+        
+        if view_mode == "Grid":
+            # Grid view with images
+            cols_per_row = 4
+            rows = (len(display_df) + cols_per_row - 1) // cols_per_row
+            
+            for row in range(rows):
+                cols = st.columns(cols_per_row)
+                for col_idx in range(cols_per_row):
+                    idx = row * cols_per_row + col_idx
+                    if idx < len(display_df):
+                        item = display_df.iloc[idx]
+                        with cols[col_idx]:
+                            # Display image
+                            if item.get('Primary Image URL') and item['Primary Image URL'] != 'N/A':
+                                try:
+                                    st.image(item['Primary Image URL'], use_container_width=True)
+                                except:
+                                    st.image("https://via.placeholder.com/200x200?text=No+Image", 
+                                            use_container_width=True)
+                            else:
+                                st.image("https://via.placeholder.com/200x200?text=No+Image", 
+                                        use_container_width=True)
+                            
+                            # Product info
+                            st.caption(f"**{item.get('Brand', 'N/A')}**")
+                            product_name = item.get('Product Name', 'N/A')
+                            st.caption(product_name[:50] + "..." if len(product_name) > 50 else product_name)
+                            
+                            # Status badges
+                            badge_text = []
+                            if item.get('Is Refurbished') == 'YES':
+                                badge_text.append("🔄")
+                            if item.get('Has Warranty') == 'YES':
+                                badge_text.append("🛡️")
+                            if item.get('Has REFU Badge') == 'YES':
+                                badge_text.append("🏷️")
+                            if item.get('Express') == 'Yes':
+                                badge_text.append("⚡")
+                            
+                            if badge_text:
+                                st.caption(" ".join(badge_text))
+                            
+                            # Price and SKU
+                            st.caption(f"💰 {item.get('Price', 'N/A')}")
+                            with st.expander("Details"):
+                                st.caption(f"**SKU:** {item.get('SKU', 'N/A')}")
+                                st.caption(f"**Seller:** {item.get('Seller Name', 'N/A')} ({item.get('Seller Score', 'N/A')})")
+                                st.caption(f"**Warranty:** {item.get('Warranty Duration', 'N/A')}")
+        else:
+            # List view with images
+            for idx, item in display_df.iterrows():
+                with st.container():
+                    col1, col2 = st.columns([1, 4])
+                    
+                    with col1:
+                        # Display image
+                        if item.get('Primary Image URL') and item['Primary Image URL'] != 'N/A':
+                            try:
+                                st.image(item['Primary Image URL'], width=150)
+                            except:
+                                st.image("https://via.placeholder.com/150x150?text=No+Image", width=150)
+                        else:
+                            st.image("https://via.placeholder.com/150x150?text=No+Image", width=150)
+                    
+                    with col2:
+                        st.markdown(f"**{item.get('Product Name', 'N/A')}**")
+                        
+                        # Info row
+                        info_cols = st.columns(5)
+                        with info_cols[0]:
+                            st.caption(f"**Brand:** {item.get('Brand', 'N/A')}")
+                        with info_cols[1]:
+                            refurb_status = "✅ YES" if item.get('Is Refurbished') == 'YES' else "❌ NO"
+                            st.caption(f"**Refurbished:** {refurb_status}")
+                        with info_cols[2]:
+                            warranty_status = item.get('Warranty Duration', 'N/A')
+                            st.caption(f"**Warranty:** {warranty_status}")
+                        with info_cols[3]:
+                            st.caption(f"**Price:** {item.get('Price', 'N/A')}")
+                        with info_cols[4]:
+                            badge_icon = "✅" if item.get('Red Badge in Image', '').startswith('YES') else "❌"
+                            st.caption(f"**Red Badge:** {badge_icon}")
+                        
+                        # Second row
+                        detail_cols = st.columns(3)
+                        with detail_cols[0]:
+                            st.caption(f"**Seller:** {item.get('Seller Name', 'N/A')} ({item.get('Seller Score', 'N/A')})")
+                        with detail_cols[1]:
+                            st.caption(f"**SKU:** {item.get('SKU', 'N/A')}")
+                        with detail_cols[2]:
+                            refu_badge = "✅" if item.get('Has REFU Badge') == 'YES' else "❌"
+                            st.caption(f"**REFU Badge:** {refu_badge}")
+                    
+                    st.divider()
+        
         # Refurbished Status Breakdown
         if (df['Is Refurbished'] == 'YES').any():
+            st.markdown("---")
             st.markdown("### 🔄 Refurbished Products Details")
             refurb_df = df[df['Is Refurbished'] == 'YES']
             st.dataframe(refurb_df, use_container_width=True)
         
         # Full Results
+        st.markdown("---")
         st.markdown("### 📋 Complete Analysis Results")
         st.dataframe(df, use_container_width=True)
         
@@ -903,7 +1058,7 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
             st.markdown(f"""
             **Refurbished Detection:**
             - {refurb_count} products identified as refurbished/renewed
-            - Detection based on: product title, badges, condition statements
+            - Detection based on: REFU badges, product title, condition statements
             
             **Warranty Coverage:**
             - {warranty_count} products have warranty information
@@ -917,3 +1072,13 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
             - Extracted seller names and performance scores where available
             - Useful for verifying authorized refurbished sellers
             """)
+            
+            # REFU Badge Statistics
+            if 'Has REFU Badge' in df.columns:
+                refu_badge_count = (df['Has REFU Badge'] == 'YES').sum()
+                st.markdown(f"""
+                **REFU Badge Compliance:**
+                - {refu_badge_count} products have official REFU badge
+                - This is Jumia's official refurbished product marker
+                - Products without REFU badge may need listing review
+                """)
