@@ -47,6 +47,15 @@ tag_files = {
     "Grade C": "Refurbished-StickerUpdated-Grade-C.png"
 }
 
+tag_size_percent = st.sidebar.slider(
+    "Tag Size (% of image width)",
+    min_value=8,
+    max_value=20,
+    value=15,
+    step=1,
+    help="Adjust the width of the refurbished tag relative to the product image"
+)
+
 show_bottom_banner = st.sidebar.checkbox(
     "Show condition banner at bottom",
     value=True,
@@ -56,10 +65,11 @@ show_bottom_banner = st.sidebar.checkbox(
 st.sidebar.markdown("---")
 st.sidebar.info("""
 **Layout:**
-- Tag overlays on the right side of the product
-- Tag height matches product height  
+- Product image is scaled down to fit on the left
+- Tag overlays on the right side
+- Adjustable tag size (8-20% of canvas width)
 - Optional bottom condition banner
-- Output maintains original product dimensions
+- Output maintains original dimensions
 """)
 
 # Main content area
@@ -119,47 +129,67 @@ with col2:
             tag_image = Image.open(tag_path).convert("RGBA")
             
             # Get original dimensions
-            prod_width, prod_height = product_image.size
+            orig_prod_width, orig_prod_height = product_image.size
             tag_img_width, tag_img_height = tag_image.size
             
-            # The tag images have a bottom banner (~10% of height)
+            # The tag images have a bottom banner (~15% of height)
             # If user doesn't want the banner, crop it out
             if not show_bottom_banner:
-                # Calculate banner height (approximately 10% of tag image)
+                # Calculate banner height (approximately 15% of tag image)
                 banner_height = int(tag_img_height * 0.15)
                 # Crop the tag to remove bottom banner
                 tag_image = tag_image.crop((0, 0, tag_img_width, tag_img_height - banner_height))
             
-            # Calculate new tag size to match product height
-            new_tag_height = prod_height
-            tag_aspect_ratio = tag_image.size[0] / tag_image.size[1]  # width/height
-            new_tag_width = int(new_tag_height * tag_aspect_ratio)
+            # Output canvas will be the original product dimensions
+            canvas_width = orig_prod_width
+            canvas_height = orig_prod_height
             
-            # Resize tag to match product height
+            # Calculate tag size - make it proportional to canvas width
+            new_tag_width = int(canvas_width * (tag_size_percent / 100))
+            tag_aspect_ratio = tag_image.size[1] / tag_image.size[0]  # height/width
+            new_tag_height = int(new_tag_width * tag_aspect_ratio)
+            
+            # Scale down the product image to leave room for the tag
+            # Product should take up the remaining space (canvas width - tag width)
+            available_width = canvas_width - new_tag_width
+            
+            # Scale product to fit in available width while maintaining aspect ratio
+            product_aspect_ratio = orig_prod_height / orig_prod_width
+            new_prod_width = available_width
+            new_prod_height = int(new_prod_width * product_aspect_ratio)
+            
+            # If scaled height exceeds canvas height, scale based on height instead
+            if new_prod_height > canvas_height:
+                new_prod_height = canvas_height
+                new_prod_width = int(new_prod_height / product_aspect_ratio)
+            
+            # Resize product image
+            product_resized = product_image.resize((new_prod_width, new_prod_height), Image.Resampling.LANCZOS)
+            
+            # Resize tag to match canvas height
             tag_resized = tag_image.resize((new_tag_width, new_tag_height), Image.Resampling.LANCZOS)
             
-            # Create a new canvas that fits both product and tag side by side
-            # Keep original product dimensions
-            result_width = prod_width
-            result_height = prod_height
+            # Create result image with original dimensions (white background for JPEG)
+            result_image = Image.new("RGB", (canvas_width, canvas_height), (255, 255, 255))
             
-            # Create new image with white background for JPEG compatibility
-            result_image = Image.new("RGB", (result_width, result_height), (255, 255, 255))
+            # Center the product vertically if needed
+            prod_y_position = (canvas_height - new_prod_height) // 2
             
-            # Paste product image first
-            if product_image.mode == 'RGBA':
-                result_image.paste(product_image, (0, 0), product_image)
+            # Paste scaled product image on the left
+            if product_resized.mode == 'RGBA':
+                result_image.paste(product_resized, (0, prod_y_position), product_resized)
             else:
-                result_image.paste(product_image, (0, 0))
+                result_image.paste(product_resized, (0, prod_y_position))
             
             # Calculate position for tag - align to right edge
-            tag_x_position = prod_width - new_tag_width
+            tag_x_position = canvas_width - new_tag_width
+            tag_y_position = 0  # Align to top
             
             # Paste tag on top, overlaying the right side
             if tag_resized.mode == 'RGBA':
-                result_image.paste(tag_resized, (tag_x_position, 0), tag_resized)
+                result_image.paste(tag_resized, (tag_x_position, tag_y_position), tag_resized)
             else:
-                result_image.paste(tag_resized, (tag_x_position, 0))
+                result_image.paste(tag_resized, (tag_x_position, tag_y_position))
             
             # Display the result
             st.image(result_image, use_container_width=True)
