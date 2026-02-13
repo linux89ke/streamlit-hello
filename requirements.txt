@@ -40,3 +40,4 @@ streamlit-aggrid
 
 # Critical: Protobuf version for Streamlit compatibility
 protobuf==3.20.3
+opencv-python-headless
