@@ -337,16 +337,6 @@ def detect_refurbished_status(soup, product_name):
                 refurb_data['refurb_indicators'].append('Condition statement found')
             break
     
-    # 6. Check product details
-    details_section = soup.find(['div', 'section'], class_=re.compile(r'detail|description|product-desc'))
-    if details_section:
-        details_text = details_section.get_text()[:500].lower()
-        if any(kw in details_text for kw in refurb_keywords):
-            if refurb_data['is_refurbished'] == 'NO':
-                refurb_data['is_refurbished'] = 'YES'
-            if 'Product description mentions refurbished' not in refurb_data['refurb_indicators']:
-                refurb_data['refurb_indicators'].append('Product description mentions refurbished')
-    
     return refurb_data
 
 # --- 5. ENHANCED SELLER EXTRACTION ---
@@ -528,7 +518,7 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
     # 7. Refurbished Status
     refurb_status = detect_refurbished_status(soup, product_name)
     data['Is Refurbished'] = refurb_status['is_refurbished']
-    data['Has refurb tag'] = refurb_status['has_refurb_tag'] # RENAMED
+    data['Has refurb tag'] = refurb_status['has_refurb_tag'] 
     data['Refurbished Indicators'] = ', '.join(refurb_status['refurb_indicators']) if refurb_status['refurb_indicators'] else 'None'
 
     # OVERRIDE: If brand is Renewed, the status should be "YES"
@@ -544,9 +534,9 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
 
     # 9. Image Badge
     if check_images and image_url and image_url != "N/A":
-        data['grading tag'] = has_red_badge(image_url) # RENAMED
+        data['grading tag'] = has_red_badge(image_url) 
     else:
-        data['grading tag'] = 'Not Checked' # RENAMED
+        data['grading tag'] = 'Not Checked'
 
     # 10. Express & Price
     express_badge = soup.find(['svg', 'img', 'span'], attrs={'aria-label': re.compile(r'Jumia Express', re.I)})
@@ -573,13 +563,30 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
         if rating_match:
             data['Product Rating'] = rating_match.group(1) + '/5'
     
-    # 12. Check for Description Images/Infographics
-    desc_section = soup.find('div', class_=re.compile(r'markup|-pvs|product-desc|detail'))
-    data['Has info-graphics'] = 'NO' # RENAMED
+    # 12. Check for Description Images/Infographics (UPDATED LOGIC)
+    # Priority: Look for the standard 'markup' class used for rich descriptions
+    desc_section = soup.find('div', class_='markup')
+    
+    # Fallback: Look for any container with 'Product details' header
+    if not desc_section:
+        header = soup.find(['h2', 'div'], string=re.compile(r'Product details', re.I))
+        if header:
+            desc_section = header.find_next('div')
+
+    data['Has info-graphics'] = 'NO'
+    
     if desc_section:
         desc_images = desc_section.find_all('img')
-        if desc_images:
-             data['Has info-graphics'] = 'YES' # RENAMED
+        # Filter logic: Ignore tiny tracking pixels (1x1) often found in descriptions
+        count = 0
+        for img in desc_images:
+            # Check if it's a real content image
+            src = img.get('data-src') or img.get('src', '')
+            if src and ('.jpg' in src or '.png' in src or '.jpeg' in src):
+                count += 1
+        
+        if count > 0:
+             data['Has info-graphics'] = 'YES'
 
     return data
 
@@ -597,19 +604,19 @@ def scrape_item_enhanced(target, headless=True, timeout=20, check_images=True):
         'Category': 'N/A',
         'SKU': 'N/A',
         'Is Refurbished': 'NO',
-        'Has refurb tag': 'NO', # RENAMED
+        'Has refurb tag': 'NO', 
         'Refurbished Indicators': 'None',
         'Has Warranty': 'NO',
         'Warranty Duration': 'N/A',
         'Warranty Source': 'None',
         'Warranty Address': 'N/A',
-        'grading tag': 'Not Checked', # RENAMED
+        'grading tag': 'Not Checked',
         'Primary Image URL': 'N/A',
         'Image URLs': [],
         'Price': 'N/A',
         'Product Rating': 'N/A',
         'Express': 'No',
-        'Has info-graphics': 'NO' # RENAMED
+        'Has info-graphics': 'NO'
     }
 
     try:
