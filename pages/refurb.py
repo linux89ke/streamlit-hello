@@ -47,44 +47,14 @@ tag_files = {
     "Grade C": "Refurbished-StickerUpdated-Grade-C.png"
 }
 
-# Tag size settings
-st.sidebar.header("Tag Size Settings")
-tag_width_percent = st.sidebar.slider(
-    "Tag Width (% of image width)",
-    min_value=10,
-    max_value=50,
-    value=25,
-    step=5
-)
-
-# Position settings
-st.sidebar.header("Position Settings")
-horizontal_position = st.sidebar.selectbox(
-    "Horizontal Position:",
-    ["Right", "Left"]
-)
-
-vertical_position = st.sidebar.selectbox(
-    "Vertical Position:",
-    ["Top", "Middle", "Bottom"]
-)
-
-# Padding settings
-horizontal_padding = st.sidebar.slider(
-    "Horizontal Padding (pixels)",
-    min_value=0,
-    max_value=100,
-    value=20,
-    step=5
-)
-
-vertical_padding = st.sidebar.slider(
-    "Vertical Padding (pixels)",
-    min_value=0,
-    max_value=100,
-    value=20,
-    step=5
-)
+st.sidebar.markdown("---")
+st.sidebar.info("""
+**Layout:**
+- Product image positioned on the left
+- Refurbished tag on the right
+- Tag height matches product height
+- Clean, professional appearance
+""")
 
 # Main content area
 col1, col2 = st.columns(2)
@@ -145,32 +115,27 @@ with col2:
             # Get original dimensions
             prod_width, prod_height = product_image.size
             
-            # Calculate new tag size based on percentage of image width
-            new_tag_width = int(prod_width * (tag_width_percent / 100))
-            tag_aspect_ratio = tag_image.size[1] / tag_image.size[0]
-            new_tag_height = int(new_tag_width * tag_aspect_ratio)
+            # Calculate new tag size to match product height
+            # Tag height should be same as product height
+            new_tag_height = prod_height
+            tag_aspect_ratio = tag_image.size[0] / tag_image.size[1]  # width/height
+            new_tag_width = int(new_tag_height * tag_aspect_ratio)
             
-            # Resize tag
+            # Resize tag to match product height
             tag_resized = tag_image.resize((new_tag_width, new_tag_height), Image.Resampling.LANCZOS)
             
-            # Calculate position
-            if horizontal_position == "Right":
-                x_position = prod_width - new_tag_width - horizontal_padding
-            else:  # Left
-                x_position = horizontal_padding
+            # Create a new canvas that fits both product and tag side by side
+            total_width = prod_width + new_tag_width
+            total_height = prod_height
             
-            if vertical_position == "Top":
-                y_position = vertical_padding
-            elif vertical_position == "Middle":
-                y_position = (prod_height - new_tag_height) // 2
-            else:  # Bottom
-                y_position = prod_height - new_tag_height - vertical_padding
+            # Create new image with white/transparent background
+            result_image = Image.new("RGBA", (total_width, total_height), (255, 255, 255, 0))
             
-            # Create a copy of the product image
-            result_image = product_image.copy()
+            # Paste product image on the left
+            result_image.paste(product_image, (0, 0), product_image)
             
-            # Paste the tag onto the product image
-            result_image.paste(tag_resized, (x_position, y_position), tag_resized)
+            # Paste tag on the right side
+            result_image.paste(tag_resized, (prod_width, 0), tag_resized)
             
             # Display the result
             st.image(result_image, use_container_width=True)
@@ -214,7 +179,7 @@ st.markdown("---")
 st.markdown(
     """
     <div style='text-align: center; color: #666;'>
-    <p>💡 Tip: Adjust the tag size and position using the sidebar controls</p>
+    <p>💡 Tip: The tag will automatically scale to match your product image height</p>
     </div>
     """,
     unsafe_allow_html=True
