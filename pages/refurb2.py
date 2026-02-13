@@ -254,7 +254,6 @@ def detect_refurbished_status(soup, product_name):
     refurb_data = {
         'is_refurbished': 'NO',
         'refurb_indicators': [],
-        'condition_text': 'N/A',
         'has_refu_badge': 'NO'
     }
     
@@ -320,7 +319,6 @@ def detect_refurbished_status(soup, product_name):
     for pattern in condition_patterns:
         match = re.search(pattern, page_text, re.IGNORECASE)
         if match:
-            refurb_data['condition_text'] = match.group(0).strip()
             if refurb_data['is_refurbished'] == 'NO' and any(kw in match.group(0).lower() for kw in refurb_keywords):
                 refurb_data['is_refurbished'] = 'YES'
             if 'Condition statement found' not in refurb_data['refurb_indicators']:
@@ -339,19 +337,13 @@ def detect_refurbished_status(soup, product_name):
     
     return refurb_data
 
-# --- 5. ENHANCED SELLER EXTRACTION (FIXED) ---
+# --- 5. ENHANCED SELLER EXTRACTION ---
 def extract_seller_info(soup):
     """
-    Extract detailed seller information.
-    Fixed to avoid grabbing generic text and specifically target seller name.
+    Extract only seller name.
     """
     seller_data = {
-        'seller_name': 'N/A',
-        'seller_score': 'N/A',
-        'seller_followers': 'N/A',
-        'shipping_speed': 'N/A',
-        'quality_score': 'N/A',
-        'customer_rating': 'N/A'
+        'seller_name': 'N/A'
     }
     
     # Method 1: Jumia's "Seller Information" box
@@ -365,55 +357,23 @@ def extract_seller_info(soup):
         # Get container
         container = seller_section.find_parent('div') or seller_section.parent
         if container:
-            # 1. Try to find the specific class Jumia uses for seller names often: ".-m -pbs" or similar
+            # 1. Try to find the specific class Jumia uses for seller names
             name_element = container.find(['p', 'div'], class_=re.compile(r'-pbs|-m'))
             
             if name_element and len(name_element.get_text().strip()) > 1:
                 seller_data['seller_name'] = name_element.get_text().strip()
             else:
-                # 2. Robust fallback: Find all links/text in this container
-                # Filter out "Follow", "Seller Information", scores, etc.
+                # 2. Robust fallback
                 candidates = container.find_all(['a', 'p', 'b'])
                 for c in candidates:
                     text = c.get_text().strip()
-                    # Skip if text is one of these
                     if not text or any(x in text.lower() for x in ['follow', 'score', 'seller', 'information', '%', 'rating']):
                         continue
-                    # Skip if it looks like a score
                     if re.search(r'\d+%', text): 
                         continue
                         
-                    # Found a likely name
                     seller_data['seller_name'] = text
                     break
-            
-            # Extract Score
-            score_text = container.find(string=re.compile(r'\d+%'))
-            if score_text:
-                seller_data['seller_score'] = score_text.strip()
-            
-            # Extract Followers
-            follower_pattern = re.compile(r'(\d+)\s*Follower', re.I)
-            follower_text = container.find(string=follower_pattern)
-            if follower_text:
-                match = follower_pattern.search(follower_text)
-                if match:
-                    seller_data['seller_followers'] = match.group(1)
-
-    # Method 2: Seller Performance section
-    perf_section = soup.find(['h3', 'h4', 'div'], string=re.compile(r'Seller\s+Performance', re.I))
-    if perf_section:
-        perf_container = perf_section.parent if perf_section.name in ['h3', 'h4'] else perf_section
-        perf_text = perf_container.get_text()
-        
-        speed_match = re.search(r'Shipping\s+speed:\s*(\w+)', perf_text, re.I)
-        if speed_match: seller_data['shipping_speed'] = speed_match.group(1)
-        
-        quality_match = re.search(r'Quality\s+Score:\s*([\w\s]+?)(?:\n|$)', perf_text, re.I)
-        if quality_match: seller_data['quality_score'] = quality_match.group(1).strip()
-        
-        rating_match = re.search(r'Customer\s+Rating:\s*(\w+)', perf_text, re.I)
-        if rating_match: seller_data['customer_rating'] = rating_match.group(1)
     
     return seller_data
 
@@ -457,12 +417,10 @@ def process_inputs(text_input, file_input, default_domain):
 def clean_jumia_sku(raw_sku):
     """
     Cleans Jumia SKUs by removing trailing variation characters.
-    Target: HP246CL5YN82ANAFAMZM -> HP246CL5YN82ANAFAMZ
     """
     if not raw_sku or raw_sku == "N/A":
         return "N/A"
     
-    # Strictly look for the NAFAM region suffix and discard anything after it
     match = re.search(r'([A-Z0-9]+NAFAM[A-Z])', raw_sku)
     if match:
         return match.group(1)
@@ -477,45 +435,40 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
     product_name = h1.text.strip() if h1 else "N/A"
     data['Product Name'] = product_name
 
-    # 2. Brand - Improved with specific fix for hidden/JS brands
+    # 2. Brand
     brand_label = soup.find(string=re.compile(r"Brand:\s*", re.I))
     if brand_label and brand_label.parent:
         brand_link = brand_label.parent.find('a')
         if brand_link:
             data['Brand'] = brand_link.text.strip()
         else:
-            # text extraction might grab script tags if not careful
             raw_text = brand_label.parent.get_text().replace('Brand:', '').split('|')[0].strip()
             data['Brand'] = raw_text
     
-    # Fallback to breadcrumbs
     if data['Brand'] in ["N/A", ""]:
         brand_crumb = soup.find('a', href=re.compile(r'/[\w\-]+/$'))
         if brand_crumb:
             data['Brand'] = brand_crumb.get_text().strip()
 
-    # --- FIX FOR "undefined...window.fbq" ---
-    # If the extracted brand contains JS code or is suspiciously long/garbage
+    # FIX FOR "undefined...window.fbq"
     if data['Brand'] and ("window.fbq" in data['Brand'] or "undefined" in data['Brand'] or "function(" in data['Brand']):
         data['Brand'] = "Renewed"
     
-    # If brand is generic or still missing, infer from Product Name
-    if data['Brand'] in ["N/A", ""] or data['Brand'].lower() in ["generic", "renewed"]:
+    # Generic / Refurbished cleanup in Brand
+    if data['Brand'] in ["N/A", ""] or data['Brand'].lower() in ["generic", "renewed", "refurbished"]:
         first_word = product_name.split()[0] if product_name != "N/A" else "N/A"
-        # If the product starts with "Renewed", that IS the brand
         if first_word.lower() == "renewed":
              data['Brand'] = "Renewed"
         elif len(product_name.split()) > 1:
             data['Brand'] = first_word
 
-    # 3. Seller Information
+    # Explicit check: If Brand is extracted as 'Refurbished', change it to 'Renewed'
+    if data['Brand'].lower() == 'refurbished':
+        data['Brand'] = "Renewed"
+
+    # 3. Seller Information (Name Only)
     seller_info = extract_seller_info(soup)
     data['Seller Name'] = seller_info['seller_name']
-    data['Seller Score'] = seller_info['seller_score']
-    data['Seller Followers'] = seller_info['seller_followers']
-    data['Shipping Speed'] = seller_info['shipping_speed']
-    data['Quality Score'] = seller_info['quality_score']
-    data['Customer Rating'] = seller_info['customer_rating']
 
     # 4. Category
     breadcrumbs = soup.select('.osh-breadcrumb a, .brcbs a, [class*="breadcrumb"] a')
@@ -533,7 +486,6 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
         sku_found = sku_element['data-sku']
     else:
         text_content = soup.get_text()
-        # Look for pattern ending in NAFAMZ/U/G etc.
         sku_match = re.search(r'SKU[:\s]*([A-Z0-9]+NAFAM[A-Z])', text_content)
         if sku_match:
             sku_found = sku_match.group(1)
@@ -567,7 +519,10 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
     data['Is Refurbished'] = refurb_status['is_refurbished']
     data['Has REFU Badge'] = refurb_status['has_refu_badge']
     data['Refurbished Indicators'] = ', '.join(refurb_status['refurb_indicators']) if refurb_status['refurb_indicators'] else 'None'
-    data['Condition Text'] = refurb_status['condition_text']
+
+    # OVERRIDE: If brand is Renewed, the status should be "Renewed"
+    if data['Brand'] == "Renewed":
+        data['Is Refurbished'] = "Renewed"
 
     # 8. Warranty
     warranty_info = extract_warranty_info(soup, product_name)
@@ -599,19 +554,13 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
         else:
             data['Price'] = price_text
 
-    # 11. Ratings
+    # 11. Product Rating
     rating_elem = soup.find(['span', 'div'], class_=re.compile(r'rating|stars'))
     if rating_elem:
         rating_text = rating_elem.get_text()
         rating_match = re.search(r'([\d.]+)\s*out of\s*5', rating_text)
         if rating_match:
             data['Product Rating'] = rating_match.group(1) + '/5'
-
-    review_count = soup.find(string=re.compile(r'\(\d+\s*verified ratings?\)', re.I))
-    if review_count:
-        count_match = re.search(r'(\d+)', review_count)
-        if count_match:
-            data['Review Count'] = count_match.group(1)
     
     return data
 
@@ -626,17 +575,11 @@ def scrape_item_enhanced(target, headless=True, timeout=20, check_images=True):
         'Product Name': 'N/A',
         'Brand': 'N/A',
         'Seller Name': 'N/A',
-        'Seller Score': 'N/A',
-        'Seller Followers': 'N/A',
-        'Shipping Speed': 'N/A',
-        'Quality Score': 'N/A',
-        'Customer Rating': 'N/A',
         'Category': 'N/A',
         'SKU': 'N/A',
         'Is Refurbished': 'NO',
         'Has REFU Badge': 'NO',
         'Refurbished Indicators': 'None',
-        'Condition Text': 'N/A',
         'Has Warranty': 'NO',
         'Warranty Duration': 'N/A',
         'Warranty Source': 'None',
@@ -646,7 +589,6 @@ def scrape_item_enhanced(target, headless=True, timeout=20, check_images=True):
         'Image URLs': [],
         'Price': 'N/A',
         'Product Rating': 'N/A',
-        'Review Count': 'N/A',
         'Express': 'No'
     }
 
@@ -838,9 +780,11 @@ if st.button("🚀 Start Refurbished Product Analysis", type="primary"):
                                 st.write("🖼️ Image")
                     with col2:
                         st.caption(f"**Last processed:** {last_item.get('Product Name', 'N/A')[:60]}...")
-                        refurb_icon = "✅" if last_item.get('Is Refurbished') == 'YES' else "❌"
+                        # Updated status check for "Renewed"
+                        refurb_text = last_item.get('Is Refurbished', 'NO')
+                        refurb_icon = "✅" if refurb_text in ['YES', 'Renewed'] else "❌"
                         warranty_icon = "✅" if last_item.get('Has Warranty') == 'YES' else "❌"
-                        st.caption(f"Refurbished: {refurb_icon} | Warranty: {warranty_icon} | Brand: {last_item.get('Brand', 'N/A')}")
+                        st.caption(f"Refurbished: {refurb_icon} ({refurb_text}) | Warranty: {warranty_icon} | Brand: {last_item.get('Brand', 'N/A')}")
         
         elapsed = time.time() - start_time
         st.session_state['scraped_results'] = all_results
@@ -881,14 +825,14 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
     if st.session_state['scraped_results']:
         df = pd.DataFrame(st.session_state['scraped_results'])
         
-        # Reorder columns for better visibility
+        # Reorder columns
         priority_cols = [
             'SKU', 'Product Name', 'Brand', 'Is Refurbished', 'Has REFU Badge',
             'Has Warranty', 'Warranty Duration', 'Red Badge in Image',
-            'Seller Name', 'Seller Score', 'Shipping Speed', 'Quality Score', 'Customer Rating',
-            'Price', 'Product Rating', 'Review Count', 'Express', 
-            'Category', 'Refurbished Indicators', 'Condition Text',
-            'Warranty Source', 'Warranty Address', 'Seller Followers', 
+            'Seller Name', 
+            'Price', 'Product Rating', 'Express', 
+            'Category', 'Refurbished Indicators', 
+            'Warranty Source', 'Warranty Address', 
             'Primary Image URL', 'Input Source'
         ]
         cols = [c for c in priority_cols if c in df.columns]
@@ -901,7 +845,8 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
         with col1:
             st.metric("✅ Products Analyzed", len(df))
         with col2:
-            refurb_count = (df['Is Refurbished'] == 'YES').sum()
+            # Count includes both 'YES' and 'Renewed'
+            refurb_count = df['Is Refurbished'].isin(['YES', 'Renewed']).sum()
             st.metric("🔄 Refurbished Items", refurb_count)
         with col3:
             warranty_count = (df['Has Warranty'] == 'YES').sum()
@@ -925,7 +870,8 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
             show_refurb_only = st.checkbox("Refurbished only", value=False)
         
         # Filter dataframe if needed
-        display_df = df[df['Is Refurbished'] == 'YES'] if show_refurb_only else df
+        # Modified filter to include "Renewed" status
+        display_df = df[df['Is Refurbished'].isin(['YES', 'Renewed'])] if show_refurb_only else df
         
         if view_mode == "Grid":
             # Grid view with images
@@ -957,7 +903,7 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
                             
                             # Status badges
                             badge_text = []
-                            if item.get('Is Refurbished') == 'YES':
+                            if item.get('Is Refurbished') in ['YES', 'Renewed']:
                                 badge_text.append("🔄")
                             if item.get('Has Warranty') == 'YES':
                                 badge_text.append("🛡️")
@@ -973,7 +919,7 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
                             st.caption(f"💰 {item.get('Price', 'N/A')}")
                             with st.expander("Details"):
                                 st.caption(f"**SKU:** {item.get('SKU', 'N/A')}")
-                                st.caption(f"**Seller:** {item.get('Seller Name', 'N/A')} ({item.get('Seller Score', 'N/A')})")
+                                st.caption(f"**Seller:** {item.get('Seller Name', 'N/A')}")
                                 st.caption(f"**Warranty:** {item.get('Warranty Duration', 'N/A')}")
         else:
             # List view with images
@@ -999,7 +945,9 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
                         with info_cols[0]:
                             st.caption(f"**Brand:** {item.get('Brand', 'N/A')}")
                         with info_cols[1]:
-                            refurb_status = "✅ YES" if item.get('Is Refurbished') == 'YES' else "❌ NO"
+                            # Logic for displaying status text
+                            refurb_val = item.get('Is Refurbished')
+                            refurb_status = f"✅ {refurb_val}" if refurb_val in ['YES', 'Renewed'] else "❌ NO"
                             st.caption(f"**Refurbished:** {refurb_status}")
                         with info_cols[2]:
                             warranty_status = item.get('Warranty Duration', 'N/A')
@@ -1013,7 +961,7 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
                         # Second row
                         detail_cols = st.columns(3)
                         with detail_cols[0]:
-                            st.caption(f"**Seller:** {item.get('Seller Name', 'N/A')} ({item.get('Seller Score', 'N/A')})")
+                            st.caption(f"**Seller:** {item.get('Seller Name', 'N/A')}")
                         with detail_cols[1]:
                             st.caption(f"**SKU:** {item.get('SKU', 'N/A')}")
                         with detail_cols[2]:
@@ -1023,16 +971,28 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
                     st.divider()
         
         # Refurbished Status Breakdown
-        if (df['Is Refurbished'] == 'YES').any():
+        if df['Is Refurbished'].isin(['YES', 'Renewed']).any():
             st.markdown("---")
             st.markdown("### 🔄 Refurbished Products Details")
-            refurb_df = df[df['Is Refurbished'] == 'YES']
+            refurb_df = df[df['Is Refurbished'].isin(['YES', 'Renewed'])]
             st.dataframe(refurb_df, use_container_width=True)
         
-        # Full Results
+        # Full Results (Highlighted)
         st.markdown("---")
         st.markdown("### 📋 Complete Analysis Results")
-        st.dataframe(df, use_container_width=True)
+        
+        # Highlighting function for Renewed brands (Row highlight includes Brand column)
+        def highlight_renewed(row):
+            # If brand is 'Renewed', color the whole row yellow
+            if row['Brand'] == 'Renewed':
+                return ['background-color: #fffacd'] * len(row) # LemonChiffon color
+            return [''] * len(row)
+
+        try:
+            st.dataframe(df.style.apply(highlight_renewed, axis=1), use_container_width=True)
+        except Exception:
+            # Fallback if styling fails
+            st.dataframe(df, use_container_width=True)
         
         # Download button
         csv = df.to_csv(index=False).encode('utf-8')
@@ -1043,33 +1003,3 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
             "text/csv",
             key='download-csv'
         )
-        
-        # Additional insights
-        with st.expander("💡 Analysis Insights", expanded=False):
-            st.markdown(f"""
-            **Refurbished Detection:**
-            - {refurb_count} products identified as refurbished/renewed
-            - Detection based on: REFU badges, product title, condition statements
-            
-            **Warranty Coverage:**
-            - {warranty_count} products have warranty information
-            - Warranty sources: product names, specifications, page content
-            
-            **Image Analysis:**
-            - {'Enabled' if check_images else 'Disabled'} red badge detection in product images
-            - Scans for prominent red areas indicating refurbished tags
-            
-            **Seller Information:**
-            - Extracted seller names and performance scores where available
-            - Useful for verifying authorized refurbished sellers
-            """)
-            
-            # REFU Badge Statistics
-            if 'Has REFU Badge' in df.columns:
-                refu_badge_count = (df['Has REFU Badge'] == 'YES').sum()
-                st.markdown(f"""
-                **REFU Badge Compliance:**
-                - {refu_badge_count} products have official REFU badge
-                - This is Jumia's official refurbished product marker
-                - Products without REFU badge may need listing review
-                """)
