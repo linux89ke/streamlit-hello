@@ -381,52 +381,41 @@ def extract_seller_info(soup):
         'customer_rating': 'N/A'
     }
     
-    # Method 1: Look for "Seller Information" heading first
-    seller_heading = soup.find(['h2', 'h3', 'h4', 'div'], string=re.compile(r'Seller\s+Information', re.I))
+    # Method 1: Jumia's seller information section structure
+    # Look for "Seller Information" heading (more flexible matching)
+    seller_section = soup.find(['h2', 'h3', 'div'], string=re.compile(r'Seller\s+Information', re.I))
     
-    if seller_heading:
-        # Get the parent container or next elements
-        container = seller_heading.parent if seller_heading.name != 'div' else seller_heading
+    if not seller_section:
+        # Try finding by class
+        seller_section = soup.find(['div', 'section'], class_=re.compile(r'seller', re.I))
+    
+    if seller_section:
+        # Get the container - may be parent or next sibling
+        container = seller_section.parent if seller_section.name in ['h2', 'h3'] else seller_section
         
-        # Look for seller link - try multiple patterns
-        # Pattern 1: Direct link in container
+        # Extract seller name - look for link with seller pattern
         seller_link = container.find('a', href=re.compile(r'^/[^/]+/$'))
-        
         if seller_link:
             seller_name = seller_link.get_text().strip()
-            if seller_name and not any(x in seller_name.lower() for x in ['follow', 'seller information', 'view']):
+            # Clean up the seller name
+            if seller_name and not any(x in seller_name.lower() for x in ['follow', 'seller', 'view']):
                 seller_data['seller_name'] = seller_name
         
-        # If not found, try finding link after the heading
-        if seller_data['seller_name'] == 'N/A':
-            next_link = seller_heading.find_next('a', href=re.compile(r'^/[\w\-]+/$'))
-            if next_link:
-                seller_name = next_link.get_text().strip()
-                if seller_name and len(seller_name) > 2 and not any(x in seller_name.lower() for x in ['follow', 'view', 'seller']):
-                    seller_data['seller_name'] = seller_name
+        # Extract seller score - look for percentage
+        score_pattern = re.compile(r'(\d+)%')
+        score_text = container.find(string=re.compile(r'\d+%'))
+        if score_text:
+            score_match = score_pattern.search(score_text)
+            if score_match:
+                seller_data['seller_score'] = score_match.group(1) + '%'
         
-        # Extract seller score and followers from the container area
-        container_text = container.get_text() if container else ''
-        
-        # Seller score
-        score_match = re.search(r'(\d+)%', container_text)
-        if score_match:
-            seller_data['seller_score'] = score_match.group(1) + '%'
-        
-        # Followers
-        follower_match = re.search(r'(\d+)\s*Follower', container_text, re.I)
-        if follower_match:
-            seller_data['seller_followers'] = follower_match.group(1)
-    
-    # Method 1B: Try finding seller section by class if heading not found
-    if seller_data['seller_name'] == 'N/A':
-        seller_box = soup.find(['div', 'section'], class_=re.compile(r'seller', re.I))
-        if seller_box:
-            seller_link = seller_box.find('a', href=re.compile(r'^/[\w\-]+/$'))
-            if seller_link:
-                seller_name = seller_link.get_text().strip()
-                if seller_name and not any(x in seller_name.lower() for x in ['follow', 'view', 'sell on']):
-                    seller_data['seller_name'] = seller_name
+        # Extract followers - look for number followed by "Follower"
+        follower_pattern = re.compile(r'(\d+)\s*Follower', re.I)
+        follower_text = container.find(string=follower_pattern)
+        if follower_text:
+            follower_match = follower_pattern.search(follower_text)
+            if follower_match:
+                seller_data['seller_followers'] = follower_match.group(1)
     
     # Method 2: Seller Performance section (separate from seller info)
     perf_section = soup.find(['h3', 'h4', 'div'], string=re.compile(r'Seller\s+Performance', re.I))
@@ -502,52 +491,24 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
     brand_label = soup.find(string=re.compile(r"Brand:\s*", re.I))
     if brand_label and brand_label.parent:
         brand_link = brand_label.parent.find('a')
-        if brand_link:
-            brand_text = brand_link.text.strip()
-        else:
-            brand_text = brand_label.parent.get_text().replace('Brand:', '').split('|')[0].strip()
-        
-        # Check if brand contains JavaScript code or undefined
-        if brand_text and not any(x in brand_text.lower() for x in ['undefined', 'typeof', 'window', 'function', 'fbq', '===', '&&']):
-            data['Brand'] = brand_text
+        data['Brand'] = brand_link.text.strip() if brand_link else \
+                       brand_label.parent.get_text().replace('Brand:', '').split('|')[0].strip()
     
-    # Extract brand from breadcrumbs if not found or if it was bad
+    # Extract brand from breadcrumbs if not found
     if data['Brand'] in ["N/A", ""]:
         brand_crumb = soup.find('a', href=re.compile(r'/[\w\-]+/$'))
         if brand_crumb:
-            brand_text = brand_crumb.get_text().strip()
-            if brand_text and len(brand_text) > 1:
-                data['Brand'] = brand_text
+            data['Brand'] = brand_crumb.get_text().strip()
     
-    # If brand still generic, undefined, or contains JavaScript, use product name or set to Renewed
-    if data['Brand'] in ["N/A", ""] or any(x in data['Brand'].lower() for x in ['undefined', 'typeof', 'function', 'generic']):
-        # Check if product is refurbished from title
-        product_name_lower = product_name.lower()
-        if any(kw in product_name_lower for kw in ['refurbished', 'renewed', 'refurb']):
-            # For refurbished products with bad brand, try to extract from name
-            first_word = product_name.split()[0] if product_name != "N/A" else "N/A"
-            # Check if first word is "Renewed" or similar - if so, get second word
-            if first_word.lower() in ["renewed", "refurbished"]:
-                if len(product_name.split()) > 1:
-                    second_word = product_name.split()[1]
-                    # Verify second word looks like a brand (not a descriptor)
-                    if second_word and len(second_word) > 2 and second_word[0].isupper():
-                        data['Brand'] = second_word
-                    else:
-                        data['Brand'] = "Renewed"
-                else:
-                    data['Brand'] = "Renewed"
-            elif first_word and len(first_word) > 2:
-                data['Brand'] = first_word
-            else:
-                data['Brand'] = "Renewed"
+    # If brand still generic or Renewed, try to extract from product name
+    if data['Brand'] in ["N/A", ""] or data['Brand'].lower() in ["generic", "renewed"]:
+        # Extract first word from product name (usually the brand)
+        first_word = product_name.split()[0] if product_name != "N/A" else "N/A"
+        # Check if first word is "Renewed" - if so, get second word
+        if first_word.lower() == "renewed" and len(product_name.split()) > 1:
+            data['Brand'] = product_name.split()[1]
         else:
-            # For non-refurbished, try to extract from product name
-            first_word = product_name.split()[0] if product_name != "N/A" else "N/A"
-            if first_word and len(first_word) > 2:
-                data['Brand'] = first_word
-            else:
-                data['Brand'] = "N/A"
+            data['Brand'] = first_word
 
     # Seller Information (Enhanced)
     seller_info = extract_seller_info(soup)
