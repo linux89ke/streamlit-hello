@@ -22,12 +22,29 @@ tag_type = st.sidebar.selectbox(
     ["Renewed", "Grade A", "Grade B", "Grade C"]
 )
 
-# Tag file mapping
+# Tag file mapping - will check multiple locations
+import os
+
+def get_tag_path(filename):
+    """Check multiple possible locations for tag files"""
+    possible_paths = [
+        filename,  # Same directory as script
+        os.path.join(os.path.dirname(__file__), filename),  # Script directory
+        os.path.join(os.getcwd(), filename),  # Current working directory
+    ]
+    
+    for path in possible_paths:
+        if os.path.exists(path):
+            return path
+    
+    # If not found, return the filename (will show error)
+    return filename
+
 tag_files = {
-    "Renewed": "/mnt/user-data/uploads/RefurbishedStickerUpdated-Renewd.png",
-    "Grade A": "/mnt/user-data/uploads/Refurbished-StickerUpdated-Grade-A.png",
-    "Grade B": "/mnt/user-data/uploads/Refurbished-StickerUpdated-Grade-B.png",
-    "Grade C": "/mnt/user-data/uploads/Refurbished-StickerUpdated-Grade-C.png"
+    "Renewed": "RefurbishedStickerUpdated-Renewd.png",
+    "Grade A": "Refurbished-StickerUpdated-Grade-A.png",
+    "Grade B": "Refurbished-StickerUpdated-Grade-B.png",
+    "Grade C": "Refurbished-StickerUpdated-Grade-C.png"
 }
 
 # Tag size settings
@@ -107,7 +124,23 @@ with col2:
     if product_image is not None:
         # Load the selected tag
         try:
-            tag_image = Image.open(tag_files[tag_type]).convert("RGBA")
+            tag_filename = tag_files[tag_type]
+            tag_path = get_tag_path(tag_filename)
+            
+            if not os.path.exists(tag_path):
+                st.error(f"❌ Tag file not found: {tag_filename}")
+                st.info("""
+                **Please make sure the tag PNG files are in the same directory as this app.**
+                
+                Required files:
+                - RefurbishedStickerUpdated-Renewd.png
+                - Refurbished-StickerUpdated-Grade-A.png
+                - Refurbished-StickerUpdated-Grade-B.png
+                - Refurbished-StickerUpdated-Grade-C.png
+                """)
+                st.stop()
+            
+            tag_image = Image.open(tag_path).convert("RGBA")
             
             # Get original dimensions
             prod_width, prod_height = product_image.size
