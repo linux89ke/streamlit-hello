@@ -1,57 +1,74 @@
-import cv2
-import numpy as np
-import requests
+import streamlit as st
+from PIL import Image, ImageDraw, ImageFont
+import io
 
-def extract_product_data(soup, data, is_sku_search, target):
-    # 1. Basic Info (Existing)
-    h1 = soup.find('h1')
-    data['Product Name'] = h1.text.strip() if h1 else "N/A"
+def add_renewed_tag(input_image):
+    # Open the image and convert to RGBA to handle transparency if needed
+    img = Image.open(input_image).convert("RGB")
+    draw = ImageDraw.Draw(img)
+    width, height = img.size
+
+    # 1. Define Tag Dimensions (Adjust these ratios as needed)
+    tag_width = int(width * 0.12)  # 12% of image width
+    tag_height = int(height * 0.75) # 75% of image height
     
-    # 2. Warranty Extraction
-    # Look for "Warranty" in the sidebar or details section
-    warranty_box = soup.find('div', string=re.compile(r'Warranty', re.I))
-    if not warranty_box:
-        # Fallback: search the whole page text for "X Months Warranty"
-        warranty_match = re.search(r'(\d+\s*(?:Month|Year)s?\s*WRTY|Warranty)', soup.get_text(), re.I)
-        data['Warranty'] = warranty_match.group(0) if warranty_match else "No Warranty Info"
-    else:
-        data['Warranty'] = warranty_box.parent.get_text(strip=True)
+    # Position: Right side, vertically centered
+    x1 = width - tag_width
+    y1 = (height - tag_height) // 2
+    x2 = width
+    y2 = y1 + tag_height
 
-    # 3. Seller Name (Improved)
-    seller_link = soup.select_one('a[href*="/seller/"]')
-    data['Seller Name'] = seller_link.text.strip() if seller_link else "Jumia"
+    # 2. Draw the Red Background
+    draw.rectangle([x1, y1, x2, y2], fill="#E31E24")
 
-    # 4. Keyword Flags (Title & Refurbished Tag)
-    name_upper = data['Product Name'].upper()
-    data['Has Refurbished Title'] = "REFURBISHED" in name_upper or "RENEWED" in name_upper
+    # 3. Add the "RENEWED" Text
+    # Note: You may need to provide a path to a .ttf font file on your system
+    try:
+        font_size = int(tag_width * 0.6)
+        font = ImageFont.truetype("arial.ttf", font_size)
+    except:
+        font = ImageFont.load_default()
+
+    # Create a separate canvas for the vertical text
+    text_str = "RENEWED"
+    # Calculate text size using a dummy image or textbbox
+    tw, th = draw.textbbox((0, 0), text_str, font=font)[2:]
     
-    # Check for the official Jumia "Refurbished" badge/tag in HTML
-    refurb_badge = soup.find('span', string=re.compile(r'Refurbished', re.I))
-    data['Has Refurbished Tag'] = refurb_badge is not None
-
-    # 5. Image Processing (Red "Renewed" Tag Detection)
-    data['Has Red Image Tag'] = "No"
-    image_element = soup.select_one('img[data-main-img]')
-    img_url = image_element.get('data-src') or image_element.get('src') if image_element else None
+    txt_img = Image.new("RGBA", (tw, th), (0, 0, 0, 0))
+    d = ImageDraw.Draw(txt_img)
+    d.text((0, 0), text_str, font=font, fill="white")
     
-    if img_url:
-        if img_url.startswith('//'): img_url = 'https:' + img_url
-        try:
-            # Download image for analysis
-            resp = requests.get(img_url, stream=True, timeout=5)
-            image_array = np.asarray(bytearray(resp.content), dtype=np.uint8)
-            img = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
-            
-            # Define "Red" range in HSV
-            hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-            lower_red = np.array([0, 120, 70])
-            upper_red = np.array([10, 255, 255])
-            mask = cv2.inRange(hsv, lower_red, upper_red)
-            
-            # If a significant red block exists (the banner), flag it
-            if np.sum(mask) > 5000: # Threshold for the "Renewed" banner size
-                data['Has Red Image Tag'] = "Yes"
-        except:
-            pass
+    # Rotate text 90 degrees and paste it onto the main image
+    rotated_txt = txt_img.rotate(90, expand=1)
+    
+    # Center the rotated text inside the red bar
+    paste_x = x1 + (tag_width - rotated_txt.width) // 2
+    paste_y = y1 + (tag_height - rotated_txt.height) // 2
+    img.paste(rotated_txt, (paste_x, paste_y), rotated_txt)
 
-    return data
+    return img
+
+# --- Streamlit UI ---
+st.title("Laptop Tag Automator")
+st.write("Upload an image to automatically add the red 'RENEWED' banner.")
+
+uploaded_file = st.file_uploader("Choose a laptop image...", type=["jpg", "jpeg", "png"])
+
+if uploaded_file is not None:
+    # Process image
+    result_img = add_renewed_tag(uploaded_file)
+    
+    # Display side-by-side
+    st.image(result_img, caption="Processed Image", use_container_width=True)
+    
+    # Download button
+    buf = io.BytesIO()
+    result_img.save(buf, format="JPEG")
+    byte_im = buf.getvalue()
+    
+    st.download_button(
+        label="Download Tagged Image",
+        data=byte_im,
+        file_name="renewed_laptop.jpg",
+        mime="image/jpeg"
+    )
