@@ -158,12 +158,7 @@ def has_red_badge(image_url):
 # --- 3. WARRANTY EXTRACTION ---
 def extract_warranty_info(soup, product_name):
     """
-    Extract warranty information from multiple sources:
-    1. Dedicated Warranty section (Jumia specific)
-    2. Product title/name
-    3. Specifications table
-    4. Product details section
-    5. Warranty address field
+    Extract warranty information from multiple sources.
     """
     warranty_data = {
         'has_warranty': 'NO',
@@ -179,18 +174,14 @@ def extract_warranty_info(soup, product_name):
         r'warranty[:\s]*(\d+)\s*(?:months?|years?)',
     ]
     
-    # 1. PRIORITY: Check dedicated Warranty section (Jumia pages have this)
-    # Look for heading "Warranty" followed by duration
+    # 1. PRIORITY: Check dedicated Warranty section
     warranty_heading = soup.find(['h3', 'h4', 'div', 'dt'], string=re.compile(r'^\s*Warranty\s*$', re.I))
     if warranty_heading:
-        # Get the next element that contains the warranty info
         warranty_value = warranty_heading.find_next(['div', 'dd', 'p'])
         if warranty_value:
             warranty_text = warranty_value.get_text().strip()
             
-            # Check if it's a valid warranty (not empty, not N/A)
             if warranty_text and warranty_text.lower() not in ['n/a', 'na', 'none', '']:
-                # Try to extract duration with patterns
                 duration_found = False
                 for pattern in warranty_patterns:
                     match = re.search(pattern, warranty_text, re.IGNORECASE)
@@ -204,7 +195,6 @@ def extract_warranty_info(soup, product_name):
                         duration_found = True
                         break
                 
-                # If no pattern match but we have text like "1 year" or "6 months"
                 if not duration_found:
                     simple_match = re.search(r'(\d+)\s*(month|year)', warranty_text, re.IGNORECASE)
                     if simple_match:
@@ -212,7 +202,7 @@ def extract_warranty_info(soup, product_name):
                         warranty_data['warranty_duration'] = warranty_text.strip()
                         warranty_data['warranty_source'] = 'Warranty Section'
     
-    # 2. Check product name for warranty mentions (only if not found in section)
+    # 2. Check product name
     if warranty_data['has_warranty'] == 'NO':
         for pattern in warranty_patterns:
             match = re.search(pattern, product_name, re.IGNORECASE)
@@ -225,22 +215,17 @@ def extract_warranty_info(soup, product_name):
                 warranty_data['warranty_details'] = match.group(0)
                 break
     
-    # 3. Check specifications table - look for "Warranty Address" 
-    # This indicates warranty exists even if duration not in title
+    # 3. Check specifications table
     warranty_addr_label = soup.find(string=re.compile(r'Warranty\s+Address', re.I))
     if warranty_addr_label:
         addr_element = warranty_addr_label.find_next(['dd', 'p', 'div'])
         if addr_element:
             addr_text = addr_element.get_text().strip()
-            # Clean up HTML tags if present
             addr_text = re.sub(r'<[^>]+>', '', addr_text).strip()
             if addr_text and len(addr_text) > 10:
                 warranty_data['warranty_address'] = addr_text
-                # If we have warranty address but haven't confirmed warranty yet from section
-                # Only mark as YES if we already found warranty in the warranty section
-                # Don't mark YES just from specifications
     
-    # 4. Only check specifications as last resort if no warranty section exists
+    # 4. Specifications as last resort
     if warranty_data['has_warranty'] == 'NO' and not warranty_heading:
         spec_rows = soup.find_all(['tr', 'div', 'li'], class_=re.compile(r'spec|detail|attribute|row'))
         for row in spec_rows:
@@ -264,13 +249,7 @@ def extract_warranty_info(soup, product_name):
 # --- 4. REFURBISHED STATUS DETECTION ---
 def detect_refurbished_status(soup, product_name):
     """
-    Detect if product is refurbished from multiple indicators:
-    1. REFU tag badge (Jumia specific)
-    2. "Renewed" in breadcrumb/brand
-    3. Product title
-    4. Refurbished badge/tag
-    5. Product condition text
-    6. Seller information
+    Detect if product is refurbished from multiple indicators.
     """
     refurb_data = {
         'is_refurbished': 'NO',
@@ -282,18 +261,15 @@ def detect_refurbished_status(soup, product_name):
     refurb_keywords = ['refurbished', 'renewed', 'refurb', 'recon', 'reconditioned', 
                        'ex-uk', 'ex uk', 'pre-owned', 'certified', 'restored']
     
-    # 1. CHECK FOR REFU TAG/BADGE (Jumia specific - high priority)
-    # Look for links or badges with REFU tag - must be a clickable badge
+    # 1. CHECK FOR REFU TAG/BADGE
     refu_badge = soup.find('a', href=re.compile(r'/all-products/\?tag=REFU', re.I))
     if refu_badge:
         refurb_data['is_refurbished'] = 'YES'
         refurb_data['refurb_indicators'].append('REFU tag badge present')
         refurb_data['has_refu_badge'] = 'YES'
     
-    # Also check for REFU badge image with specific structure
     refu_img = soup.find('img', attrs={'alt': re.compile(r'^REFU$', re.I)})
     if refu_img:
-        # Verify it's in a badge context
         parent = refu_img.parent
         if parent and parent.name == 'a' and 'tag=REFU' in parent.get('href', ''):
             if 'REFU tag badge present' not in refurb_data['refurb_indicators']:
@@ -301,8 +277,7 @@ def detect_refurbished_status(soup, product_name):
                 refurb_data['refurb_indicators'].append('REFU badge image')
                 refurb_data['has_refu_badge'] = 'YES'
     
-    # 2. CHECK BREADCRUMB/BRAND for "Renewed"
-    # Jumia uses "Renewed" as a brand prefix for refurbished items
+    # 2. CHECK BREADCRUMB/BRAND
     breadcrumbs = soup.find_all(['a', 'span'], class_=re.compile(r'breadcrumb|brcb'))
     for crumb in breadcrumbs:
         crumb_text = crumb.get_text().lower()
@@ -319,9 +294,8 @@ def detect_refurbished_status(soup, product_name):
             indicator = f'Title contains "{keyword}"'
             if indicator not in refurb_data['refurb_indicators']:
                 refurb_data['refurb_indicators'].append(indicator)
-            # Don't break - collect all keywords
     
-    # 4. Check for refurbished badge/tag in various locations
+    # 4. Check for refurbished badge
     badge_searches = [
         soup.find(['span', 'div', 'badge'], class_=re.compile(r'refurb|renewed', re.I)),
         soup.find(['span', 'div'], string=re.compile(r'REFURBISHED|RENEWED', re.I)),
@@ -335,14 +309,13 @@ def detect_refurbished_status(soup, product_name):
                 refurb_data['refurb_indicators'].append('Refurbished badge present')
             break
     
-    # 5. Check condition text - look more broadly
+    # 5. Check condition text
     condition_patterns = [
         r'condition[:\s]*(renewed|refurbished|excellent|good|like new|grade [a-c])',
         r'(renewed|refurbished)[,\s]*(no scratches|excellent|good condition|like new)',
         r'product condition[:\s]*([^\n]+)',
     ]
     
-    # Check first 2000 chars of page
     page_text = soup.get_text()[:2000]
     for pattern in condition_patterns:
         match = re.search(pattern, page_text, re.IGNORECASE)
@@ -354,7 +327,7 @@ def detect_refurbished_status(soup, product_name):
                 refurb_data['refurb_indicators'].append('Condition statement found')
             break
     
-    # 6. Check product details/description for refurbishment mentions
+    # 6. Check product details
     details_section = soup.find(['div', 'section'], class_=re.compile(r'detail|description|product-desc'))
     if details_section:
         details_text = details_section.get_text()[:500].lower()
@@ -366,11 +339,11 @@ def detect_refurbished_status(soup, product_name):
     
     return refurb_data
 
-# --- 5. ENHANCED SELLER EXTRACTION ---
+# --- 5. ENHANCED SELLER EXTRACTION (FIXED) ---
 def extract_seller_info(soup):
     """
-    Extract detailed seller information including performance metrics.
-    Optimized for Jumia's seller information structure.
+    Extract detailed seller information.
+    Fixed to avoid grabbing generic text and specifically target seller name.
     """
     seller_data = {
         'seller_name': 'N/A',
@@ -381,64 +354,66 @@ def extract_seller_info(soup):
         'customer_rating': 'N/A'
     }
     
-    # Method 1: Jumia's seller information section structure
-    # Look for "Seller Information" heading (more flexible matching)
-    seller_section = soup.find(['h2', 'h3', 'div'], string=re.compile(r'Seller\s+Information', re.I))
+    # Method 1: Jumia's "Seller Information" box
+    seller_section = soup.find(['h2', 'h3', 'div', 'p'], string=re.compile(r'Seller\s+Information', re.I))
     
     if not seller_section:
-        # Try finding by class
-        seller_section = soup.find(['div', 'section'], class_=re.compile(r'seller', re.I))
+        # Fallback to class search
+        seller_section = soup.find(['div', 'section'], class_=re.compile(r'seller-info|seller-box', re.I))
     
     if seller_section:
-        # Get the container - may be parent or next sibling
-        container = seller_section.parent if seller_section.name in ['h2', 'h3'] else seller_section
-        
-        # Extract seller name - look for link with seller pattern
-        seller_link = container.find('a', href=re.compile(r'^/[^/]+/$'))
-        if seller_link:
-            seller_name = seller_link.get_text().strip()
-            # Clean up the seller name
-            if seller_name and not any(x in seller_name.lower() for x in ['follow', 'seller', 'view']):
-                seller_data['seller_name'] = seller_name
-        
-        # Extract seller score - look for percentage
-        score_pattern = re.compile(r'(\d+)%')
-        score_text = container.find(string=re.compile(r'\d+%'))
-        if score_text:
-            score_match = score_pattern.search(score_text)
-            if score_match:
-                seller_data['seller_score'] = score_match.group(1) + '%'
-        
-        # Extract followers - look for number followed by "Follower"
-        follower_pattern = re.compile(r'(\d+)\s*Follower', re.I)
-        follower_text = container.find(string=follower_pattern)
-        if follower_text:
-            follower_match = follower_pattern.search(follower_text)
-            if follower_match:
-                seller_data['seller_followers'] = follower_match.group(1)
-    
-    # Method 2: Seller Performance section (separate from seller info)
+        # Get container
+        container = seller_section.find_parent('div') or seller_section.parent
+        if container:
+            # 1. Try to find the specific class Jumia uses for seller names often: ".-m -pbs" or similar
+            name_element = container.find(['p', 'div'], class_=re.compile(r'-pbs|-m'))
+            
+            if name_element and len(name_element.get_text().strip()) > 1:
+                seller_data['seller_name'] = name_element.get_text().strip()
+            else:
+                # 2. Robust fallback: Find all links/text in this container
+                # Filter out "Follow", "Seller Information", scores, etc.
+                candidates = container.find_all(['a', 'p', 'b'])
+                for c in candidates:
+                    text = c.get_text().strip()
+                    # Skip if text is one of these
+                    if not text or any(x in text.lower() for x in ['follow', 'score', 'seller', 'information', '%', 'rating']):
+                        continue
+                    # Skip if it looks like a score
+                    if re.search(r'\d+%', text): 
+                        continue
+                        
+                    # Found a likely name
+                    seller_data['seller_name'] = text
+                    break
+            
+            # Extract Score
+            score_text = container.find(string=re.compile(r'\d+%'))
+            if score_text:
+                seller_data['seller_score'] = score_text.strip()
+            
+            # Extract Followers
+            follower_pattern = re.compile(r'(\d+)\s*Follower', re.I)
+            follower_text = container.find(string=follower_pattern)
+            if follower_text:
+                match = follower_pattern.search(follower_text)
+                if match:
+                    seller_data['seller_followers'] = match.group(1)
+
+    # Method 2: Seller Performance section
     perf_section = soup.find(['h3', 'h4', 'div'], string=re.compile(r'Seller\s+Performance', re.I))
-    
     if perf_section:
-        # Get parent container
         perf_container = perf_section.parent if perf_section.name in ['h3', 'h4'] else perf_section
         perf_text = perf_container.get_text()
         
-        # Shipping speed
         speed_match = re.search(r'Shipping\s+speed:\s*(\w+)', perf_text, re.I)
-        if speed_match:
-            seller_data['shipping_speed'] = speed_match.group(1)
+        if speed_match: seller_data['shipping_speed'] = speed_match.group(1)
         
-        # Quality Score
         quality_match = re.search(r'Quality\s+Score:\s*([\w\s]+?)(?:\n|$)', perf_text, re.I)
-        if quality_match:
-            seller_data['quality_score'] = quality_match.group(1).strip()
+        if quality_match: seller_data['quality_score'] = quality_match.group(1).strip()
         
-        # Customer Rating
         rating_match = re.search(r'Customer\s+Rating:\s*(\w+)', perf_text, re.I)
-        if rating_match:
-            seller_data['customer_rating'] = rating_match.group(1)
+        if rating_match: seller_data['customer_rating'] = rating_match.group(1)
     
     return seller_data
 
@@ -479,38 +454,49 @@ def process_inputs(text_input, file_input, default_domain):
     return final_targets
 
 # --- 7. ENHANCED SCRAPING FUNCTION ---
+def clean_jumia_sku(raw_sku):
+    """
+    Cleans Jumia SKUs by removing trailing variation characters.
+    Target: HP246CL5YN82ANAFAMZM -> HP246CL5YN82ANAFAMZ
+    """
+    if not raw_sku or raw_sku == "N/A":
+        return "N/A"
+    
+    # Strictly look for the NAFAM region suffix and discard anything after it
+    match = re.search(r'([A-Z0-9]+NAFAM[A-Z])', raw_sku)
+    if match:
+        return match.group(1)
+        
+    return raw_sku.strip()
+
 def extract_product_data_enhanced(soup, data, is_sku_search, target, check_images=True):
     """Extract comprehensive product data with refurbished analysis."""
     
-    # Product Name
+    # 1. Product Name
     h1 = soup.find('h1')
     product_name = h1.text.strip() if h1 else "N/A"
     data['Product Name'] = product_name
 
-    # Brand - improved extraction
+    # 2. Brand
     brand_label = soup.find(string=re.compile(r"Brand:\s*", re.I))
     if brand_label and brand_label.parent:
         brand_link = brand_label.parent.find('a')
         data['Brand'] = brand_link.text.strip() if brand_link else \
-                       brand_label.parent.get_text().replace('Brand:', '').split('|')[0].strip()
+                        brand_label.parent.get_text().replace('Brand:', '').split('|')[0].strip()
     
-    # Extract brand from breadcrumbs if not found
     if data['Brand'] in ["N/A", ""]:
         brand_crumb = soup.find('a', href=re.compile(r'/[\w\-]+/$'))
         if brand_crumb:
             data['Brand'] = brand_crumb.get_text().strip()
-    
-    # If brand still generic or Renewed, try to extract from product name
+            
     if data['Brand'] in ["N/A", ""] or data['Brand'].lower() in ["generic", "renewed"]:
-        # Extract first word from product name (usually the brand)
         first_word = product_name.split()[0] if product_name != "N/A" else "N/A"
-        # Check if first word is "Renewed" - if so, get second word
         if first_word.lower() == "renewed" and len(product_name.split()) > 1:
             data['Brand'] = product_name.split()[1]
         else:
             data['Brand'] = first_word
 
-    # Seller Information (Enhanced)
+    # 3. Seller Information
     seller_info = extract_seller_info(soup)
     data['Seller Name'] = seller_info['seller_name']
     data['Seller Score'] = seller_info['seller_score']
@@ -519,29 +505,36 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
     data['Quality Score'] = seller_info['quality_score']
     data['Customer Rating'] = seller_info['customer_rating']
 
-    # Category - improved extraction with full path
+    # 4. Category
     breadcrumbs = soup.select('.osh-breadcrumb a, .brcbs a, [class*="breadcrumb"] a')
     cats = []
     for b in breadcrumbs:
         text = b.text.strip()
-        # Include all breadcrumbs including "Home"
         if text and len(text) > 0:
             cats.append(text)
-    
-    # Create full category path
-    if len(cats) > 0:
-        data['Category'] = ' > '.join(cats)
+    data['Category'] = ' > '.join(cats) if cats else "N/A"
+
+    # 5. SKU (FIXED)
+    sku_found = "N/A"
+    sku_element = soup.find(attrs={'data-sku': True})
+    if sku_element:
+        sku_found = sku_element['data-sku']
     else:
-        data['Category'] = "N/A"
+        text_content = soup.get_text()
+        # Look for pattern ending in NAFAMZ/U/G etc.
+        sku_match = re.search(r'SKU[:\s]*([A-Z0-9]+NAFAM[A-Z])', text_content)
+        if sku_match:
+            sku_found = sku_match.group(1)
+        else:
+            sku_match_generic = re.search(r'SKU[:\s]*([A-Z0-9\-]+)', text_content)
+            if sku_match_generic:
+                sku_found = sku_match_generic.group(1)
+            elif is_sku_search:
+                sku_found = target.get('original_sku', 'N/A')
 
-    # SKU
-    sku_match = re.search(r'SKU[:\s]*([A-Z0-9\-]+)', soup.get_text())
-    if sku_match:
-        data['SKU'] = sku_match.group(1)
-    elif is_sku_search:
-        data['SKU'] = target.get('original_sku', 'N/A')
+    data['SKU'] = clean_jumia_sku(sku_found)
 
-    # Images - get primary and all images
+    # 6. Images
     image_url = None
     for img in soup.find_all('img', limit=15):
         src = img.get('data-src') or img.get('src')
@@ -555,58 +548,53 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
                 data['Image URLs'].append(src)
                 if not image_url:
                     image_url = src
-    
     data['Primary Image URL'] = image_url if image_url else "N/A"
 
-    # Refurbished Status Detection
+    # 7. Refurbished Status
     refurb_status = detect_refurbished_status(soup, product_name)
     data['Is Refurbished'] = refurb_status['is_refurbished']
     data['Has REFU Badge'] = refurb_status['has_refu_badge']
     data['Refurbished Indicators'] = ', '.join(refurb_status['refurb_indicators']) if refurb_status['refurb_indicators'] else 'None'
     data['Condition Text'] = refurb_status['condition_text']
 
-    # Warranty Information
+    # 8. Warranty
     warranty_info = extract_warranty_info(soup, product_name)
     data['Has Warranty'] = warranty_info['has_warranty']
     data['Warranty Duration'] = warranty_info['warranty_duration']
     data['Warranty Source'] = warranty_info['warranty_source']
     data['Warranty Address'] = warranty_info['warranty_address']
 
-    # Image Badge Detection (if enabled)
+    # 9. Image Badge
     if check_images and image_url and image_url != "N/A":
         data['Red Badge in Image'] = has_red_badge(image_url)
     else:
         data['Red Badge in Image'] = 'Not Checked'
 
-    # Express
+    # 10. Express & Price
     express_badge = soup.find(['svg', 'img', 'span'], attrs={'aria-label': re.compile(r'Jumia Express', re.I)})
     if express_badge:
         data['Express'] = "Yes"
     
-    # Price - improved extraction
     price_tag = soup.find('span', class_=re.compile(r'price|prc|-b'))
     if not price_tag:
-        # Alternative price location
         price_tag = soup.find(['div', 'span'], string=re.compile(r'KSh\s*[\d,]+'))
     
     if price_tag:
         price_text = price_tag.get_text().strip()
-        # Clean up price text
         price_match = re.search(r'KSh\s*([\d,]+)', price_text)
         if price_match:
             data['Price'] = 'KSh ' + price_match.group(1)
         else:
             data['Price'] = price_text
-    
-    # Customer Reviews/Ratings
+
+    # 11. Ratings
     rating_elem = soup.find(['span', 'div'], class_=re.compile(r'rating|stars'))
     if rating_elem:
         rating_text = rating_elem.get_text()
         rating_match = re.search(r'([\d.]+)\s*out of\s*5', rating_text)
         if rating_match:
             data['Product Rating'] = rating_match.group(1) + '/5'
-    
-    # Number of reviews
+
     review_count = soup.find(string=re.compile(r'\(\d+\s*verified ratings?\)', re.I))
     if review_count:
         count_match = re.search(r'(\d+)', review_count)
@@ -886,9 +874,9 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
             'SKU', 'Product Name', 'Brand', 'Is Refurbished', 'Has REFU Badge',
             'Has Warranty', 'Warranty Duration', 'Red Badge in Image',
             'Seller Name', 'Seller Score', 'Shipping Speed', 'Quality Score', 'Customer Rating',
-            'Price', 'Product Rating', 'Review Count', 'Express',
+            'Price', 'Product Rating', 'Review Count', 'Express', 
             'Category', 'Refurbished Indicators', 'Condition Text',
-            'Warranty Source', 'Warranty Address', 'Seller Followers',
+            'Warranty Source', 'Warranty Address', 'Seller Followers', 
             'Primary Image URL', 'Input Source'
         ]
         cols = [c for c in priority_cols if c in df.columns]
@@ -945,10 +933,10 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
                                     st.image(item['Primary Image URL'], use_container_width=True)
                                 except:
                                     st.image("https://via.placeholder.com/200x200?text=No+Image", 
-                                            use_container_width=True)
+                                             use_container_width=True)
                             else:
                                 st.image("https://via.placeholder.com/200x200?text=No+Image", 
-                                        use_container_width=True)
+                                         use_container_width=True)
                             
                             # Product info
                             st.caption(f"**{item.get('Brand', 'N/A')}**")
