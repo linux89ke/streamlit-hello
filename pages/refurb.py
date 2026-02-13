@@ -128,14 +128,20 @@ with col2:
             total_width = prod_width + new_tag_width
             total_height = prod_height
             
-            # Create new image with white/transparent background
-            result_image = Image.new("RGBA", (total_width, total_height), (255, 255, 255, 0))
+            # Create new image with white background for JPEG compatibility
+            result_image = Image.new("RGB", (total_width, total_height), (255, 255, 255))
             
             # Paste product image on the left
-            result_image.paste(product_image, (0, 0), product_image)
+            if product_image.mode == 'RGBA':
+                result_image.paste(product_image, (0, 0), product_image)
+            else:
+                result_image.paste(product_image, (0, 0))
             
             # Paste tag on the right side
-            result_image.paste(tag_resized, (prod_width, 0), tag_resized)
+            if tag_resized.mode == 'RGBA':
+                result_image.paste(tag_resized, (prod_width, 0), tag_resized)
+            else:
+                result_image.paste(tag_resized, (prod_width, 0))
             
             # Display the result
             st.image(result_image, use_container_width=True)
@@ -143,29 +149,16 @@ with col2:
             # Download button
             st.markdown("---")
             
-            # Convert to RGB for JPEG or keep RGBA for PNG
-            output_format = st.selectbox("Output format:", ["PNG", "JPEG"])
-            
-            # Convert image to bytes
+            # Convert image to bytes as JPEG
             buf = BytesIO()
-            if output_format == "JPEG":
-                # Convert RGBA to RGB for JPEG
-                rgb_image = result_image.convert("RGB")
-                rgb_image.save(buf, format="JPEG", quality=95)
-                file_extension = "jpg"
-                mime_type = "image/jpeg"
-            else:
-                result_image.save(buf, format="PNG")
-                file_extension = "png"
-                mime_type = "image/png"
-            
+            result_image.save(buf, format="JPEG", quality=95)
             buf.seek(0)
             
             st.download_button(
-                label=f"⬇️ Download Tagged Image ({output_format})",
+                label="⬇️ Download Tagged Image (JPEG)",
                 data=buf,
-                file_name=f"refurbished_product_{tag_type.lower().replace(' ', '_')}.{file_extension}",
-                mime=mime_type,
+                file_name=f"refurbished_product_{tag_type.lower().replace(' ', '_')}.jpg",
+                mime="image/jpeg",
                 use_container_width=True
             )
             
