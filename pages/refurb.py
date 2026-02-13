@@ -127,18 +127,14 @@ with col2:
             # - Red vertical tag on right
             # - Red banner at bottom
             
-            # Analyze the tag to find where the red areas are
-            # The vertical tag is on the right side
-            # Bottom banner is at the bottom
-            
             # Approximate measurements from the 680x680 tag:
             # - Banner height: ~65 pixels (9.5% of height)
-            # - Vertical tag width: ~110 pixels (16% of width)
+            # - Vertical tag width: ~110 pixels (need to be more conservative - use 18%)
             
             banner_height = int(canvas_height * 0.095)
-            vert_tag_width = int(canvas_width * 0.16)
+            vert_tag_width = int(canvas_width * 0.18)  # Increased from 0.16 to 0.18
             
-            # Available area for product
+            # Available area for product (need to leave room for the tag)
             available_width = canvas_width - vert_tag_width
             if show_bottom_banner:
                 available_height = canvas_height - banner_height
@@ -148,16 +144,21 @@ with col2:
                 tag_image = tag_image.crop((0, 0, canvas_width, canvas_height - banner_height))
                 canvas_height = canvas_height - banner_height
             
-            # Scale product to fit in available area
+            # Scale product to fit in available area with some padding
+            # Reduce available space by 5% on each side for padding
+            padding_factor = 0.90
+            fit_width = int(available_width * padding_factor)
+            fit_height = int(available_height * padding_factor)
+            
             product_aspect_ratio = orig_prod_height / orig_prod_width
             
             # Try fitting by width
-            new_prod_width = available_width
+            new_prod_width = fit_width
             new_prod_height = int(new_prod_width * product_aspect_ratio)
             
             # If too tall, fit by height
-            if new_prod_height > available_height:
-                new_prod_height = available_height
+            if new_prod_height > fit_height:
+                new_prod_height = fit_height
                 new_prod_width = int(new_prod_height / product_aspect_ratio)
             
             # Resize product
