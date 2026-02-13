@@ -53,15 +53,6 @@ show_bottom_banner = st.sidebar.checkbox(
     help="Display the condition text banner at the bottom of the image"
 )
 
-st.sidebar.markdown("---")
-st.sidebar.info("""
-**Layout:**
-- Output dimensions match the refurbished tag
-- Product scaled to fit in left area
-- Vertical tag at original size on right
-- Optional bottom banner (full width)
-""")
-
 # Main content area
 col1, col2 = st.columns(2)
 
@@ -145,8 +136,8 @@ with col2:
                 canvas_height = canvas_height - banner_height
             
             # Scale product to fit in available area with more padding
-            # Reduce available space by 30% on each side for more padding
-            padding_factor = 0.70  # Changed from 0.80 to 0.70 for even smaller product
+            # Reduce available space by 26% on each side for padding
+            padding_factor = 0.74  # Changed from 0.70 to 0.74 for slightly larger product
             fit_width = int(available_width * padding_factor)
             fit_height = int(available_height * padding_factor)
             
