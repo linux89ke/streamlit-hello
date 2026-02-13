@@ -120,75 +120,67 @@ with col2:
             
             # Get original dimensions
             orig_prod_width, orig_prod_height = product_image.size
-            tag_full_width, tag_full_height = tag_image.size
+            canvas_width, canvas_height = tag_image.size
             
-            # The OUTPUT CANVAS matches the TAG dimensions
-            canvas_width = tag_full_width
-            canvas_height = tag_full_height
+            # The tag PNG already has the complete layout:
+            # - Black/transparent left area for product
+            # - Red vertical tag on right
+            # - Red banner at bottom
             
-            # Separate the vertical tag from the banner
-            # Bottom banner is approximately 9.5% of the tag image height
-            banner_height = int(tag_full_height * 0.095)
+            # Analyze the tag to find where the red areas are
+            # The vertical tag is on the right side
+            # Bottom banner is at the bottom
             
-            # Split into vertical tag and banner
-            vertical_tag = tag_image.crop((0, 0, tag_full_width, tag_full_height - banner_height))
-            bottom_banner = tag_image.crop((0, tag_full_height - banner_height, tag_full_width, tag_full_height))
+            # Approximate measurements from the 680x680 tag:
+            # - Banner height: ~65 pixels (9.5% of height)
+            # - Vertical tag width: ~110 pixels (16% of width)
             
-            # Get dimensions of vertical tag portion
-            vert_tag_width, vert_tag_height = vertical_tag.size
+            banner_height = int(canvas_height * 0.095)
+            vert_tag_width = int(canvas_width * 0.16)
             
-            # Calculate the available area for product (the "black" area in your demo)
-            # This is: full width minus the vertical tag width, and full height minus banner
-            available_width_for_product = canvas_width - vert_tag_width
+            # Available area for product
+            available_width = canvas_width - vert_tag_width
             if show_bottom_banner:
-                available_height_for_product = canvas_height - banner_height
+                available_height = canvas_height - banner_height
             else:
-                available_height_for_product = canvas_height
+                available_height = canvas_height
+                # If hiding banner, we need to crop it from the tag image
+                tag_image = tag_image.crop((0, 0, canvas_width, canvas_height - banner_height))
+                canvas_height = canvas_height - banner_height
             
-            # Scale product to fit within the available area
+            # Scale product to fit in available area
             product_aspect_ratio = orig_prod_height / orig_prod_width
             
-            # Try fitting by width first
-            new_prod_width = available_width_for_product
+            # Try fitting by width
+            new_prod_width = available_width
             new_prod_height = int(new_prod_width * product_aspect_ratio)
             
-            # If too tall, fit by height instead
-            if new_prod_height > available_height_for_product:
-                new_prod_height = available_height_for_product
+            # If too tall, fit by height
+            if new_prod_height > available_height:
+                new_prod_height = available_height
                 new_prod_width = int(new_prod_height / product_aspect_ratio)
             
             # Resize product
             product_resized = product_image.resize((new_prod_width, new_prod_height), Image.Resampling.LANCZOS)
             
-            # Create result image with canvas matching TAG dimensions (white background)
+            # Create result by starting with white background
             result_image = Image.new("RGB", (canvas_width, canvas_height), (255, 255, 255))
             
+            # First, paste the tag template (which has the red elements)
+            if tag_image.mode == 'RGBA':
+                result_image.paste(tag_image, (0, 0), tag_image)
+            else:
+                result_image.paste(tag_image, (0, 0))
+            
             # Center product in the available left area
-            prod_x_position = (available_width_for_product - new_prod_width) // 2
-            prod_y_position = (available_height_for_product - new_prod_height) // 2
+            prod_x = (available_width - new_prod_width) // 2
+            prod_y = (available_height - new_prod_height) // 2
             
-            # Paste product image
+            # Paste product on top
             if product_resized.mode == 'RGBA':
-                result_image.paste(product_resized, (prod_x_position, prod_y_position), product_resized)
+                result_image.paste(product_resized, (prod_x, prod_y), product_resized)
             else:
-                result_image.paste(product_resized, (prod_x_position, prod_y_position))
-            
-            # Paste vertical tag at its original position (right side)
-            tag_x_position = available_width_for_product
-            tag_y_position = 0
-            
-            if vertical_tag.mode == 'RGBA':
-                result_image.paste(vertical_tag, (tag_x_position, tag_y_position), vertical_tag)
-            else:
-                result_image.paste(vertical_tag, (tag_x_position, tag_y_position))
-            
-            # Paste bottom banner if enabled
-            if show_bottom_banner:
-                banner_y_position = canvas_height - banner_height
-                if bottom_banner.mode == 'RGBA':
-                    result_image.paste(bottom_banner, (0, banner_y_position), bottom_banner)
-                else:
-                    result_image.paste(bottom_banner, (0, banner_y_position))
+                result_image.paste(product_resized, (prod_x, prod_y))
             
             # Display the result
             st.image(result_image, use_container_width=True)
