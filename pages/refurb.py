@@ -144,9 +144,9 @@ with col2:
                 tag_image = tag_image.crop((0, 0, canvas_width, canvas_height - banner_height))
                 canvas_height = canvas_height - banner_height
             
-            # Scale product to fit in available area with some padding
-            # Reduce available space by 5% on each side for padding
-            padding_factor = 0.90
+            # Scale product to fit in available area with more padding
+            # Reduce available space by 15% on each side for more padding
+            padding_factor = 0.80  # Changed from 0.90 to 0.80 for smaller product
             fit_width = int(available_width * padding_factor)
             fit_height = int(available_height * padding_factor)
             
@@ -167,21 +167,21 @@ with col2:
             # Create result by starting with white background
             result_image = Image.new("RGB", (canvas_width, canvas_height), (255, 255, 255))
             
-            # First, paste the tag template (which has the red elements)
-            if tag_image.mode == 'RGBA':
-                result_image.paste(tag_image, (0, 0), tag_image)
-            else:
-                result_image.paste(tag_image, (0, 0))
-            
             # Center product in the available left area
             prod_x = (available_width - new_prod_width) // 2
             prod_y = (available_height - new_prod_height) // 2
             
-            # Paste product on top
+            # Paste product FIRST
             if product_resized.mode == 'RGBA':
                 result_image.paste(product_resized, (prod_x, prod_y), product_resized)
             else:
                 result_image.paste(product_resized, (prod_x, prod_y))
+            
+            # Then paste the tag template ON TOP (so it overlays the product)
+            if tag_image.mode == 'RGBA':
+                result_image.paste(tag_image, (0, 0), tag_image)
+            else:
+                result_image.paste(tag_image, (0, 0))
             
             # Display the result
             st.image(result_image, use_container_width=True)
