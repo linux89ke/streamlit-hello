@@ -123,37 +123,36 @@ with col2:
             tag_full_width, tag_full_height = tag_image.size
             
             # The tag images include both the vertical tag AND bottom banner
-            # We need to separate them
-            
             # Bottom banner is approximately 10% of the tag image height
-            banner_height = int(tag_full_height * 0.10)
+            banner_height_ratio = 0.095  # More precise ratio
+            banner_height = int(tag_full_height * banner_height_ratio)
             
             # Separate the vertical tag from the banner
             vertical_tag = tag_image.crop((0, 0, tag_full_width, tag_full_height - banner_height))
             bottom_banner = tag_image.crop((0, tag_full_height - banner_height, tag_full_width, tag_full_height))
             
-            # Output canvas dimensions - we'll use original product dimensions as base
+            # Output canvas dimensions
             canvas_width = orig_prod_width
             canvas_height = orig_prod_height
             
-            # Calculate vertical tag size (should be full height minus banner)
+            # Calculate sizes based on whether banner is shown
             if show_bottom_banner:
-                available_height_for_tag = canvas_height - banner_height
+                # Scale banner to canvas width
+                banner_final_height = int(canvas_width * banner_height_ratio * 0.15)  # Keep banner proportional
+                banner_resized = bottom_banner.resize((canvas_width, banner_final_height), Image.Resampling.LANCZOS)
+                
+                # Vertical tag should span from top to just above banner
+                available_height_for_tag = canvas_height - banner_final_height
             else:
+                banner_final_height = 0
                 available_height_for_tag = canvas_height
             
-            # Scale vertical tag to fit available height
-            tag_aspect_ratio = vertical_tag.size[0] / vertical_tag.size[1]  # width/height
-            new_tag_width = int(available_height_for_tag * tag_aspect_ratio)
+            # The vertical tag should take full height (top to banner)
             new_tag_height = available_height_for_tag
+            tag_aspect_ratio = vertical_tag.size[0] / vertical_tag.size[1]  # width/height
+            new_tag_width = int(new_tag_height * tag_aspect_ratio)
             
-            # Ensure tag doesn't exceed 30% of canvas width
-            max_tag_width = int(canvas_width * 0.30)
-            if new_tag_width > max_tag_width:
-                new_tag_width = max_tag_width
-                new_tag_height = int(new_tag_width / tag_aspect_ratio)
-            
-            # Resize the vertical tag
+            # Resize the vertical tag to full height
             tag_resized = vertical_tag.resize((new_tag_width, new_tag_height), Image.Resampling.LANCZOS)
             
             # Calculate available space for product (left side)
@@ -164,12 +163,9 @@ with col2:
                 st.stop()
             
             # Scale product to fit in the available area (left side, above banner if shown)
-            if show_bottom_banner:
-                available_height_for_product = canvas_height - banner_height
-            else:
-                available_height_for_product = canvas_height
+            available_height_for_product = available_height_for_tag
             
-            # Calculate product scaling
+            # Calculate product scaling to fit in left area
             product_aspect_ratio = orig_prod_height / orig_prod_width
             
             # Try fitting by width first
@@ -189,19 +185,11 @@ with col2:
             # Resize product
             product_resized = product_image.resize((new_prod_width, new_prod_height), Image.Resampling.LANCZOS)
             
-            # Resize bottom banner to full canvas width if shown
-            if show_bottom_banner:
-                banner_resized = bottom_banner.resize((canvas_width, banner_height), Image.Resampling.LANCZOS)
-            
             # Create result image with white background
             result_image = Image.new("RGB", (canvas_width, canvas_height), (255, 255, 255))
             
             # Position product in the left area, centered vertically in available space
-            if show_bottom_banner:
-                prod_y_position = (canvas_height - banner_height - new_prod_height) // 2
-            else:
-                prod_y_position = (canvas_height - new_prod_height) // 2
-            
+            prod_y_position = (available_height_for_tag - new_prod_height) // 2
             prod_x_position = (available_width_for_product - new_prod_width) // 2
             
             # Paste product image
@@ -210,7 +198,7 @@ with col2:
             else:
                 result_image.paste(product_resized, (prod_x_position, prod_y_position))
             
-            # Position vertical tag on the right side
+            # Position vertical tag on the right side (full height from top to banner)
             tag_x_position = canvas_width - new_tag_width
             tag_y_position = 0
             
@@ -222,7 +210,7 @@ with col2:
             
             # Paste bottom banner at the bottom (full width) if enabled
             if show_bottom_banner:
-                banner_y_position = canvas_height - banner_height
+                banner_y_position = canvas_height - banner_final_height
                 if banner_resized.mode == 'RGBA':
                     result_image.paste(banner_resized, (0, banner_y_position), banner_resized)
                 else:
