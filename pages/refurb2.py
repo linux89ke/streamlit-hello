@@ -180,34 +180,39 @@ def extract_warranty_info(soup, product_name):
     ]
     
     # 1. PRIORITY: Check dedicated Warranty section (Jumia pages have this)
-    # Look for div/section with heading "Warranty"
+    # Look for heading "Warranty" followed by duration
     warranty_heading = soup.find(['h3', 'h4', 'div', 'dt'], string=re.compile(r'^\s*Warranty\s*$', re.I))
     if warranty_heading:
-        # Get the next sibling or parent's text
-        warranty_container = warranty_heading.find_next_sibling() or warranty_heading.parent
-        if warranty_container:
-            warranty_text = warranty_container.get_text().strip()
+        # Get the next element that contains the warranty info
+        warranty_value = warranty_heading.find_next(['div', 'dd', 'p'])
+        if warranty_value:
+            warranty_text = warranty_value.get_text().strip()
             
-            # Try to extract number of months/years
-            for pattern in warranty_patterns:
-                match = re.search(pattern, warranty_text, re.IGNORECASE)
-                if match:
-                    duration = match.group(1)
-                    unit = 'months' if 'month' in match.group(0).lower() else 'years'
-                    warranty_data['has_warranty'] = 'YES'
-                    warranty_data['warranty_duration'] = f"{duration} {unit}"
-                    warranty_data['warranty_source'] = 'Warranty Section'
-                    warranty_data['warranty_details'] = warranty_text[:100]
-                    
-            # Even if no pattern match, if we found "6 Months" or similar as plain text
-            if warranty_data['has_warranty'] == 'NO' and warranty_text:
-                simple_match = re.search(r'(\d+)\s*(month|year)', warranty_text, re.IGNORECASE)
-                if simple_match:
-                    warranty_data['has_warranty'] = 'YES'
-                    warranty_data['warranty_duration'] = warranty_text.strip()
-                    warranty_data['warranty_source'] = 'Warranty Section'
+            # Check if it's a valid warranty (not empty, not N/A)
+            if warranty_text and warranty_text.lower() not in ['n/a', 'na', 'none', '']:
+                # Try to extract duration with patterns
+                duration_found = False
+                for pattern in warranty_patterns:
+                    match = re.search(pattern, warranty_text, re.IGNORECASE)
+                    if match:
+                        duration = match.group(1)
+                        unit = 'months' if 'month' in match.group(0).lower() else 'years'
+                        warranty_data['has_warranty'] = 'YES'
+                        warranty_data['warranty_duration'] = f"{duration} {unit}"
+                        warranty_data['warranty_source'] = 'Warranty Section'
+                        warranty_data['warranty_details'] = warranty_text[:100]
+                        duration_found = True
+                        break
+                
+                # If no pattern match but we have text like "1 year" or "6 months"
+                if not duration_found:
+                    simple_match = re.search(r'(\d+)\s*(month|year)', warranty_text, re.IGNORECASE)
+                    if simple_match:
+                        warranty_data['has_warranty'] = 'YES'
+                        warranty_data['warranty_duration'] = warranty_text.strip()
+                        warranty_data['warranty_source'] = 'Warranty Section'
     
-    # 2. Check product name for warranty mentions
+    # 2. Check product name for warranty mentions (only if not found in section)
     if warranty_data['has_warranty'] == 'NO':
         for pattern in warranty_patterns:
             match = re.search(pattern, product_name, re.IGNORECASE)
@@ -220,50 +225,39 @@ def extract_warranty_info(soup, product_name):
                 warranty_data['warranty_details'] = match.group(0)
                 break
     
-    # 3. Check specifications table - look for "Warranty Address" or warranty info
-    warranty_addr_label = soup.find(string=re.compile(r'Warranty Address', re.I))
+    # 3. Check specifications table - look for "Warranty Address" 
+    # This indicates warranty exists even if duration not in title
+    warranty_addr_label = soup.find(string=re.compile(r'Warranty\s+Address', re.I))
     if warranty_addr_label:
-        addr_container = warranty_addr_label.find_next()
-        if addr_container:
-            addr_text = addr_container.get_text().strip()
+        addr_element = warranty_addr_label.find_next(['dd', 'p', 'div'])
+        if addr_element:
+            addr_text = addr_element.get_text().strip()
+            # Clean up HTML tags if present
+            addr_text = re.sub(r'<[^>]+>', '', addr_text).strip()
             if addr_text and len(addr_text) > 10:
                 warranty_data['warranty_address'] = addr_text
-                if warranty_data['has_warranty'] == 'NO':
-                    # If we found warranty address but no duration yet, mark as having warranty
-                    warranty_data['has_warranty'] = 'YES'
-                    warranty_data['warranty_source'] = 'Warranty Address Present'
+                # If we have warranty address but haven't confirmed warranty yet from section
+                # Only mark as YES if we already found warranty in the warranty section
+                # Don't mark YES just from specifications
     
-    # 4. Check general specifications for warranty row
-    spec_rows = soup.find_all(['tr', 'div', 'li'], class_=re.compile(r'spec|detail|attribute|row'))
-    for row in spec_rows:
-        text = row.get_text()
-        if 'warranty' in text.lower():
-            for pattern in warranty_patterns:
-                match = re.search(pattern, text, re.IGNORECASE)
-                if match:
-                    duration = match.group(1)
-                    unit = 'months' if 'month' in match.group(0).lower() else 'years'
-                    warranty_data['has_warranty'] = 'YES'
-                    warranty_data['warranty_duration'] = f"{duration} {unit}"
-                    warranty_data['warranty_source'] = 'Specifications'
-                    warranty_data['warranty_details'] = text.strip()[:100]
+    # 4. Only check specifications as last resort if no warranty section exists
+    if warranty_data['has_warranty'] == 'NO' and not warranty_heading:
+        spec_rows = soup.find_all(['tr', 'div', 'li'], class_=re.compile(r'spec|detail|attribute|row'))
+        for row in spec_rows:
+            text = row.get_text()
+            if 'warranty' in text.lower():
+                for pattern in warranty_patterns:
+                    match = re.search(pattern, text, re.IGNORECASE)
+                    if match:
+                        duration = match.group(1)
+                        unit = 'months' if 'month' in match.group(0).lower() else 'years'
+                        warranty_data['has_warranty'] = 'YES'
+                        warranty_data['warranty_duration'] = f"{duration} {unit}"
+                        warranty_data['warranty_source'] = 'Specifications'
+                        warranty_data['warranty_details'] = text.strip()[:100]
+                        break
+                if warranty_data['has_warranty'] == 'YES':
                     break
-            if warranty_data['has_warranty'] == 'YES':
-                break
-    
-    # 5. Generic page text search as last resort
-    if warranty_data['has_warranty'] == 'NO':
-        page_text = soup.get_text()[:3000]  # First 3000 chars only
-        for pattern in warranty_patterns:
-            match = re.search(pattern, page_text, re.IGNORECASE)
-            if match:
-                duration = match.group(1)
-                unit = 'months' if 'month' in match.group(0).lower() else 'years'
-                warranty_data['has_warranty'] = 'YES'
-                warranty_data['warranty_duration'] = f"{duration} {unit}"
-                warranty_data['warranty_source'] = 'Page Content'
-                warranty_data['warranty_details'] = match.group(0)
-                break
     
     return warranty_data
 
@@ -289,19 +283,23 @@ def detect_refurbished_status(soup, product_name):
                        'ex-uk', 'ex uk', 'pre-owned', 'certified', 'restored']
     
     # 1. CHECK FOR REFU TAG/BADGE (Jumia specific - high priority)
-    # Look for links or badges with REFU tag
-    refu_badge = soup.find('a', href=re.compile(r'tag=REFU', re.I))
+    # Look for links or badges with REFU tag - must be a clickable badge
+    refu_badge = soup.find('a', href=re.compile(r'/all-products/\?tag=REFU', re.I))
     if refu_badge:
         refurb_data['is_refurbished'] = 'YES'
         refurb_data['refurb_indicators'].append('REFU tag badge present')
         refurb_data['has_refu_badge'] = 'YES'
     
-    # Also check for REFU in img alt text or class names
-    refu_img = soup.find(['img', 'div', 'span'], attrs={'alt': re.compile(r'REFU', re.I)})
-    if refu_img and 'REFU tag badge present' not in refurb_data['refurb_indicators']:
-        refurb_data['is_refurbished'] = 'YES'
-        refurb_data['refurb_indicators'].append('REFU badge image')
-        refurb_data['has_refu_badge'] = 'YES'
+    # Also check for REFU badge image with specific structure
+    refu_img = soup.find('img', attrs={'alt': re.compile(r'^REFU$', re.I)})
+    if refu_img:
+        # Verify it's in a badge context
+        parent = refu_img.parent
+        if parent and parent.name == 'a' and 'tag=REFU' in parent.get('href', ''):
+            if 'REFU tag badge present' not in refurb_data['refurb_indicators']:
+                refurb_data['is_refurbished'] = 'YES'
+                refurb_data['refurb_indicators'].append('REFU badge image')
+                refurb_data['has_refu_badge'] = 'YES'
     
     # 2. CHECK BREADCRUMB/BRAND for "Renewed"
     # Jumia uses "Renewed" as a brand prefix for refurbished items
@@ -384,76 +382,63 @@ def extract_seller_info(soup):
     }
     
     # Method 1: Jumia's seller information section structure
-    # Look for "Seller Information" heading
-    seller_heading = soup.find(['h2', 'h3'], string=re.compile(r'Seller Information', re.I))
-    if seller_heading:
-        seller_section = seller_heading.find_next(['div', 'section'])
+    # Look for "Seller Information" heading (more flexible matching)
+    seller_section = soup.find(['h2', 'h3', 'div'], string=re.compile(r'Seller\s+Information', re.I))
+    
+    if not seller_section:
+        # Try finding by class
+        seller_section = soup.find(['div', 'section'], class_=re.compile(r'seller', re.I))
+    
+    if seller_section:
+        # Get the container - may be parent or next sibling
+        container = seller_section.parent if seller_section.name in ['h2', 'h3'] else seller_section
         
-        if seller_section:
-            # Extract seller name - usually a link
-            seller_link = seller_section.find('a', href=re.compile(r'/[^/]+/$'))
-            if seller_link:
-                seller_data['seller_name'] = seller_link.get_text().strip()
-            
-            # Extract seller score
-            score_text = seller_section.find(string=re.compile(r'\d+%.*Seller Score', re.I))
-            if score_text:
-                score_match = re.search(r'(\d+)%', score_text)
-                if score_match:
-                    seller_data['seller_score'] = score_match.group(1) + '%'
-            
-            # Extract followers
-            follower_text = seller_section.find(string=re.compile(r'\d+.*Follower', re.I))
-            if follower_text:
-                follower_match = re.search(r'(\d+)', follower_text)
-                if follower_match:
-                    seller_data['seller_followers'] = follower_match.group(1)
-    
-    # Method 2: Seller Performance section
-    performance_heading = soup.find(['h3', 'h4', 'div'], string=re.compile(r'Seller Performance', re.I))
-    if performance_heading:
-        perf_section = performance_heading.find_next(['div', 'ul'])
-        if perf_section:
-            perf_text = perf_section.get_text()
-            
-            # Shipping speed
-            if 'shipping speed' in perf_text.lower():
-                speed_match = re.search(r'Shipping speed:\s*(\w+)', perf_text, re.I)
-                if speed_match:
-                    seller_data['shipping_speed'] = speed_match.group(1)
-            
-            # Quality Score
-            if 'quality score' in perf_text.lower():
-                quality_match = re.search(r'Quality Score:\s*([\w\s]+)', perf_text, re.I)
-                if quality_match:
-                    seller_data['quality_score'] = quality_match.group(1).strip()
-            
-            # Customer Rating
-            if 'customer rating' in perf_text.lower():
-                rating_match = re.search(r'Customer Rating:\s*(\w+)', perf_text, re.I)
-                if rating_match:
-                    seller_data['customer_rating'] = rating_match.group(1)
-    
-    # Method 3: Alternative seller box structure (older Jumia layout)
-    if seller_data['seller_name'] == 'N/A':
-        seller_box = soup.select_one('div.-hr.-pas, div.seller-details, div[class*="seller"]')
-        if seller_box:
-            # Try to find seller name in a paragraph or link
-            seller_elem = seller_box.find(['p', 'a'], class_=re.compile(r'name|title|-m'))
-            if seller_elem:
-                seller_text = seller_elem.get_text().strip()
-                # Filter out non-seller text
-                if seller_text and not any(x in seller_text.lower() for x in ['details', 'follow', 'sell on', 'view', 'performance']):
-                    seller_data['seller_name'] = seller_text
-    
-    # Method 4: Extract from link structure /seller-name/
-    if seller_data['seller_name'] == 'N/A':
-        seller_link = soup.find('a', href=re.compile(r'/[\w\-]+/$'))
+        # Extract seller name - look for link with seller pattern
+        seller_link = container.find('a', href=re.compile(r'^/[^/]+/$'))
         if seller_link:
-            # Check if this is in seller context
-            parent_text = seller_link.parent.get_text().lower() if seller_link.parent else ''
-            if 'seller' in parent_text or 'sold by' in parent_text:
-                seller_data['seller_name'] = seller_link.get_text().strip()
+            seller_name = seller_link.get_text().strip()
+            # Clean up the seller name
+            if seller_name and not any(x in seller_name.lower() for x in ['follow', 'seller', 'view']):
+                seller_data['seller_name'] = seller_name
+        
+        # Extract seller score - look for percentage
+        score_pattern = re.compile(r'(\d+)%')
+        score_text = container.find(string=re.compile(r'\d+%'))
+        if score_text:
+            score_match = score_pattern.search(score_text)
+            if score_match:
+                seller_data['seller_score'] = score_match.group(1) + '%'
+        
+        # Extract followers - look for number followed by "Follower"
+        follower_pattern = re.compile(r'(\d+)\s*Follower', re.I)
+        follower_text = container.find(string=follower_pattern)
+        if follower_text:
+            follower_match = follower_pattern.search(follower_text)
+            if follower_match:
+                seller_data['seller_followers'] = follower_match.group(1)
+    
+    # Method 2: Seller Performance section (separate from seller info)
+    perf_section = soup.find(['h3', 'h4', 'div'], string=re.compile(r'Seller\s+Performance', re.I))
+    
+    if perf_section:
+        # Get parent container
+        perf_container = perf_section.parent if perf_section.name in ['h3', 'h4'] else perf_section
+        perf_text = perf_container.get_text()
+        
+        # Shipping speed
+        speed_match = re.search(r'Shipping\s+speed:\s*(\w+)', perf_text, re.I)
+        if speed_match:
+            seller_data['shipping_speed'] = speed_match.group(1)
+        
+        # Quality Score
+        quality_match = re.search(r'Quality\s+Score:\s*([\w\s]+?)(?:\n|$)', perf_text, re.I)
+        if quality_match:
+            seller_data['quality_score'] = quality_match.group(1).strip()
+        
+        # Customer Rating
+        rating_match = re.search(r'Customer\s+Rating:\s*(\w+)', perf_text, re.I)
+        if rating_match:
+            seller_data['customer_rating'] = rating_match.group(1)
     
     return seller_data
 
@@ -536,7 +521,13 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
 
     # Category - improved extraction with full path
     breadcrumbs = soup.select('.osh-breadcrumb a, .brcbs a, [class*="breadcrumb"] a')
-    cats = [b.text.strip() for b in breadcrumbs if b.text.strip() and b.text.strip().lower() != 'home']
+    cats = []
+    for b in breadcrumbs:
+        text = b.text.strip()
+        # Include all breadcrumbs including "Home"
+        if text and len(text) > 0:
+            cats.append(text)
+    
     # Create full category path
     if len(cats) > 0:
         data['Category'] = ' > '.join(cats)
