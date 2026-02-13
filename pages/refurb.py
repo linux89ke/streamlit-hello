@@ -145,8 +145,8 @@ with col2:
                 canvas_height = canvas_height - banner_height
             
             # Scale product to fit in available area with more padding
-            # Reduce available space by 15% on each side for more padding
-            padding_factor = 0.80  # Changed from 0.90 to 0.80 for smaller product
+            # Reduce available space by 30% on each side for more padding
+            padding_factor = 0.70  # Changed from 0.80 to 0.70 for even smaller product
             fit_width = int(available_width * padding_factor)
             fit_height = int(available_height * padding_factor)
             
