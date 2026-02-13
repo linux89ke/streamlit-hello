@@ -477,23 +477,35 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
     product_name = h1.text.strip() if h1 else "N/A"
     data['Product Name'] = product_name
 
-    # 2. Brand
+    # 2. Brand - Improved with specific fix for hidden/JS brands
     brand_label = soup.find(string=re.compile(r"Brand:\s*", re.I))
     if brand_label and brand_label.parent:
         brand_link = brand_label.parent.find('a')
-        data['Brand'] = brand_link.text.strip() if brand_link else \
-                        brand_label.parent.get_text().replace('Brand:', '').split('|')[0].strip()
+        if brand_link:
+            data['Brand'] = brand_link.text.strip()
+        else:
+            # text extraction might grab script tags if not careful
+            raw_text = brand_label.parent.get_text().replace('Brand:', '').split('|')[0].strip()
+            data['Brand'] = raw_text
     
+    # Fallback to breadcrumbs
     if data['Brand'] in ["N/A", ""]:
         brand_crumb = soup.find('a', href=re.compile(r'/[\w\-]+/$'))
         if brand_crumb:
             data['Brand'] = brand_crumb.get_text().strip()
-            
+
+    # --- FIX FOR "undefined...window.fbq" ---
+    # If the extracted brand contains JS code or is suspiciously long/garbage
+    if data['Brand'] and ("window.fbq" in data['Brand'] or "undefined" in data['Brand'] or "function(" in data['Brand']):
+        data['Brand'] = "Renewed"
+    
+    # If brand is generic or still missing, infer from Product Name
     if data['Brand'] in ["N/A", ""] or data['Brand'].lower() in ["generic", "renewed"]:
         first_word = product_name.split()[0] if product_name != "N/A" else "N/A"
-        if first_word.lower() == "renewed" and len(product_name.split()) > 1:
-            data['Brand'] = product_name.split()[1]
-        else:
+        # If the product starts with "Renewed", that IS the brand
+        if first_word.lower() == "renewed":
+             data['Brand'] = "Renewed"
+        elif len(product_name.split()) > 1:
             data['Brand'] = first_word
 
     # 3. Seller Information
