@@ -246,34 +246,29 @@ def extract_warranty_info(soup, product_name):
     
     return warranty_data
 
-# --- 4. REFURBISHED STATUS DETECTION (FIXED) ---
+# --- 4. REFURBISHED STATUS DETECTION ---
 def detect_refurbished_status(soup, product_name):
     """
     Detect if product is refurbished from multiple indicators.
-    FIX: Scopes search to the main product container to avoid false positives
-    from 'Related Products' or 'Customers Also Viewed'.
+    FIX: Scopes search to the main product container to avoid false positives.
     """
     refurb_data = {
         'is_refurbished': 'NO',
         'refurb_indicators': [],
-        'has_refu_badge': 'NO'
+        'has_refurb_tag': 'NO'
     }
     
     refurb_keywords = ['refurbished', 'renewed', 'refurb', 'recon', 'reconditioned', 
                        'ex-uk', 'ex uk', 'pre-owned', 'certified', 'restored']
 
     # --- SCOPE IDENTIFICATION ---
-    # Find the main product container (parent of H1)
-    search_scope = soup # Default to full page if structure fails
+    search_scope = soup
     h1 = soup.find('h1')
     if h1:
-        # Traverse up to find the main wrapper (typically class 'col10' or generic row)
-        # We go up 3 levels to be safe: H1 -> Title Div -> Details Div -> Main Col
         possible_container = h1.find_parent('div', class_=re.compile(r'col10|-pvs|-p'))
         if possible_container:
             search_scope = possible_container
         else:
-            # Fallback: simple parent traversal
             search_scope = h1.parent.parent
 
     # 1. CHECK FOR REFU TAG/BADGE (Scoped)
@@ -281,7 +276,7 @@ def detect_refurbished_status(soup, product_name):
     if refu_badge:
         refurb_data['is_refurbished'] = 'YES'
         refurb_data['refurb_indicators'].append('REFU tag badge present')
-        refurb_data['has_refu_badge'] = 'YES'
+        refurb_data['has_refurb_tag'] = 'YES'
     
     refu_img = search_scope.find('img', attrs={'alt': re.compile(r'^REFU$', re.I)})
     if refu_img:
@@ -290,9 +285,9 @@ def detect_refurbished_status(soup, product_name):
             if 'REFU tag badge present' not in refurb_data['refurb_indicators']:
                 refurb_data['is_refurbished'] = 'YES'
                 refurb_data['refurb_indicators'].append('REFU badge image')
-                refurb_data['has_refu_badge'] = 'YES'
+                refurb_data['has_refurb_tag'] = 'YES'
     
-    # 2. CHECK BREADCRUMB/BRAND (Global scope is fine for breadcrumbs)
+    # 2. CHECK BREADCRUMB/BRAND
     breadcrumbs = soup.find_all(['a', 'span'], class_=re.compile(r'breadcrumb|brcb'))
     for crumb in breadcrumbs:
         crumb_text = crumb.get_text().lower()
@@ -324,14 +319,13 @@ def detect_refurbished_status(soup, product_name):
                 refurb_data['refurb_indicators'].append('Refurbished badge present')
             break
     
-    # 5. Check condition text (Scoped to main text to avoid sidebar noise)
+    # 5. Check condition text (Scoped)
     condition_patterns = [
         r'condition[:\s]*(renewed|refurbished|excellent|good|like new|grade [a-c])',
         r'(renewed|refurbished)[,\s]*(no scratches|excellent|good condition|like new)',
         r'product condition[:\s]*([^\n]+)',
     ]
     
-    # Use text from the scoped container if possible, else limit characters
     page_text = search_scope.get_text()[:3000] if search_scope != soup else soup.get_text()[:3000]
     
     for pattern in condition_patterns:
@@ -534,12 +528,12 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
     # 7. Refurbished Status
     refurb_status = detect_refurbished_status(soup, product_name)
     data['Is Refurbished'] = refurb_status['is_refurbished']
-    data['Has REFU Badge'] = refurb_status['has_refu_badge']
+    data['Has refurb tag'] = refurb_status['has_refurb_tag'] # RENAMED
     data['Refurbished Indicators'] = ', '.join(refurb_status['refurb_indicators']) if refurb_status['refurb_indicators'] else 'None'
 
-    # OVERRIDE: If brand is Renewed, the status should be "Renewed"
+    # OVERRIDE: If brand is Renewed, the status should be "YES"
     if data['Brand'] == "Renewed":
-        data['Is Refurbished'] = "Renewed"
+        data['Is Refurbished'] = "YES"
 
     # 8. Warranty
     warranty_info = extract_warranty_info(soup, product_name)
@@ -550,9 +544,9 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
 
     # 9. Image Badge
     if check_images and image_url and image_url != "N/A":
-        data['Red Badge in Image'] = has_red_badge(image_url)
+        data['grading tag'] = has_red_badge(image_url) # RENAMED
     else:
-        data['Red Badge in Image'] = 'Not Checked'
+        data['grading tag'] = 'Not Checked' # RENAMED
 
     # 10. Express & Price
     express_badge = soup.find(['svg', 'img', 'span'], attrs={'aria-label': re.compile(r'Jumia Express', re.I)})
@@ -579,6 +573,14 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
         if rating_match:
             data['Product Rating'] = rating_match.group(1) + '/5'
     
+    # 12. Check for Description Images/Infographics
+    desc_section = soup.find('div', class_=re.compile(r'markup|-pvs|product-desc|detail'))
+    data['Has info-graphics'] = 'NO' # RENAMED
+    if desc_section:
+        desc_images = desc_section.find_all('img')
+        if desc_images:
+             data['Has info-graphics'] = 'YES' # RENAMED
+
     return data
 
 def scrape_item_enhanced(target, headless=True, timeout=20, check_images=True):
@@ -595,18 +597,19 @@ def scrape_item_enhanced(target, headless=True, timeout=20, check_images=True):
         'Category': 'N/A',
         'SKU': 'N/A',
         'Is Refurbished': 'NO',
-        'Has REFU Badge': 'NO',
+        'Has refurb tag': 'NO', # RENAMED
         'Refurbished Indicators': 'None',
         'Has Warranty': 'NO',
         'Warranty Duration': 'N/A',
         'Warranty Source': 'None',
         'Warranty Address': 'N/A',
-        'Red Badge in Image': 'Not Checked',
+        'grading tag': 'Not Checked', # RENAMED
         'Primary Image URL': 'N/A',
         'Image URLs': [],
         'Price': 'N/A',
         'Product Rating': 'N/A',
-        'Express': 'No'
+        'Express': 'No',
+        'Has info-graphics': 'NO' # RENAMED
     }
 
     try:
@@ -797,11 +800,11 @@ if st.button("🚀 Start Refurbished Product Analysis", type="primary"):
                                 st.write("🖼️ Image")
                     with col2:
                         st.caption(f"**Last processed:** {last_item.get('Product Name', 'N/A')[:60]}...")
-                        # Updated status check for "Renewed"
+                        # Updated status check for YES/NO
                         refurb_text = last_item.get('Is Refurbished', 'NO')
-                        refurb_icon = "✅" if refurb_text in ['YES', 'Renewed'] else "❌"
+                        refurb_icon = "✅" if refurb_text == 'YES' else "❌"
                         warranty_icon = "✅" if last_item.get('Has Warranty') == 'YES' else "❌"
-                        st.caption(f"Refurbished: {refurb_icon} ({refurb_text}) | Warranty: {warranty_icon} | Brand: {last_item.get('Brand', 'N/A')}")
+                        st.caption(f"Refurbished: {refurb_icon} | Warranty: {warranty_icon} | Brand: {last_item.get('Brand', 'N/A')}")
         
         elapsed = time.time() - start_time
         st.session_state['scraped_results'] = all_results
@@ -842,10 +845,11 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
     if st.session_state['scraped_results']:
         df = pd.DataFrame(st.session_state['scraped_results'])
         
-        # Reorder columns
+        # Reorder columns with NEW NAMES
         priority_cols = [
-            'SKU', 'Product Name', 'Brand', 'Is Refurbished', 'Has REFU Badge',
-            'Has Warranty', 'Warranty Duration', 'Red Badge in Image',
+            'SKU', 'Product Name', 'Brand', 'Is Refurbished', 'Has refurb tag',
+            'Has Warranty', 'Warranty Duration', 'grading tag',
+            'Has info-graphics',
             'Seller Name', 
             'Price', 'Product Rating', 'Express', 
             'Category', 'Refurbished Indicators', 
@@ -862,19 +866,19 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
         with col1:
             st.metric("✅ Products Analyzed", len(df))
         with col2:
-            # Count includes both 'YES' and 'Renewed'
-            refurb_count = df['Is Refurbished'].isin(['YES', 'Renewed']).sum()
+            refurb_count = (df['Is Refurbished'] == 'YES').sum()
             st.metric("🔄 Refurbished Items", refurb_count)
         with col3:
             warranty_count = (df['Has Warranty'] == 'YES').sum()
             st.metric("🛡️ With Warranty", warranty_count)
         with col4:
-            if 'Red Badge in Image' in df.columns:
-                badge_count = df['Red Badge in Image'].str.contains('YES', na=False).sum()
-                st.metric("🏷️ Red Badges Detected", badge_count)
+            if 'grading tag' in df.columns:
+                badge_count = df['grading tag'].str.contains('YES', na=False).sum()
+                st.metric("🏷️ Grading Tags", badge_count)
         with col5:
-            express_count = (df['Express'] == 'Yes').sum()
-            st.metric("⚡ Express Items", express_count)
+             if 'Has info-graphics' in df.columns:
+                desc_img_count = (df['Has info-graphics'] == 'YES').sum()
+                st.metric("🖼️ Info-graphics", desc_img_count)
         
         # Image Gallery View
         st.markdown("---")
@@ -887,8 +891,7 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
             show_refurb_only = st.checkbox("Refurbished only", value=False)
         
         # Filter dataframe if needed
-        # Modified filter to include "Renewed" status
-        display_df = df[df['Is Refurbished'].isin(['YES', 'Renewed'])] if show_refurb_only else df
+        display_df = df[df['Is Refurbished'] == 'YES'] if show_refurb_only else df
         
         if view_mode == "Grid":
             # Grid view with images
@@ -920,14 +923,16 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
                             
                             # Status badges
                             badge_text = []
-                            if item.get('Is Refurbished') in ['YES', 'Renewed']:
+                            if item.get('Is Refurbished') == 'YES':
                                 badge_text.append("🔄")
                             if item.get('Has Warranty') == 'YES':
                                 badge_text.append("🛡️")
-                            if item.get('Has REFU Badge') == 'YES':
+                            if item.get('Has refurb tag') == 'YES':
                                 badge_text.append("🏷️")
                             if item.get('Express') == 'Yes':
                                 badge_text.append("⚡")
+                            if item.get('Has info-graphics') == 'YES':
+                                badge_text.append("🖼️")
                             
                             if badge_text:
                                 st.caption(" ".join(badge_text))
@@ -964,7 +969,7 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
                         with info_cols[1]:
                             # Logic for displaying status text
                             refurb_val = item.get('Is Refurbished')
-                            refurb_status = f"✅ {refurb_val}" if refurb_val in ['YES', 'Renewed'] else "❌ NO"
+                            refurb_status = f"✅ YES" if refurb_val == 'YES' else "❌ NO"
                             st.caption(f"**Refurbished:** {refurb_status}")
                         with info_cols[2]:
                             warranty_status = item.get('Warranty Duration', 'N/A')
@@ -972,8 +977,8 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
                         with info_cols[3]:
                             st.caption(f"**Price:** {item.get('Price', 'N/A')}")
                         with info_cols[4]:
-                            badge_icon = "✅" if item.get('Red Badge in Image', '').startswith('YES') else "❌"
-                            st.caption(f"**Red Badge:** {badge_icon}")
+                            badge_icon = "✅" if item.get('grading tag', '').startswith('YES') else "❌"
+                            st.caption(f"**Grading Tag:** {badge_icon}")
                         
                         # Second row
                         detail_cols = st.columns(3)
@@ -982,16 +987,16 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
                         with detail_cols[1]:
                             st.caption(f"**SKU:** {item.get('SKU', 'N/A')}")
                         with detail_cols[2]:
-                            refu_badge = "✅" if item.get('Has REFU Badge') == 'YES' else "❌"
-                            st.caption(f"**REFU Badge:** {refu_badge}")
+                            desc_img = "✅" if item.get('Has info-graphics') == 'YES' else "❌"
+                            st.caption(f"**Info-graphics:** {desc_img}")
                     
                     st.divider()
         
         # Refurbished Status Breakdown
-        if df['Is Refurbished'].isin(['YES', 'Renewed']).any():
+        if (df['Is Refurbished'] == 'YES').any():
             st.markdown("---")
             st.markdown("### 🔄 Refurbished Products Details")
-            refurb_df = df[df['Is Refurbished'].isin(['YES', 'Renewed'])]
+            refurb_df = df[df['Is Refurbished'] == 'YES']
             st.dataframe(refurb_df, use_container_width=True)
         
         # Full Results (Highlighted)
