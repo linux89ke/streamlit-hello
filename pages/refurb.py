@@ -47,12 +47,6 @@ tag_files = {
     "Grade C": "Refurbished-StickerUpdated-Grade-C.png"
 }
 
-show_bottom_banner = st.sidebar.checkbox(
-    "Show condition banner at bottom",
-    value=True,
-    help="Display the condition text banner at the bottom of the image"
-)
-
 # Main content area
 col1, col2 = st.columns(2)
 
@@ -125,15 +119,9 @@ with col2:
             banner_height = int(canvas_height * 0.095)
             vert_tag_width = int(canvas_width * 0.18)  # Increased from 0.16 to 0.18
             
-            # Available area for product (need to leave room for the tag)
+            # Available area for product (always show banner)
             available_width = canvas_width - vert_tag_width
-            if show_bottom_banner:
-                available_height = canvas_height - banner_height
-            else:
-                available_height = canvas_height
-                # If hiding banner, we need to crop it from the tag image
-                tag_image = tag_image.crop((0, 0, canvas_width, canvas_height - banner_height))
-                canvas_height = canvas_height - banner_height
+            available_height = canvas_height - banner_height
             
             # Scale product to fit in available area with more padding
             # Reduce available space by 26% on each side for padding
