@@ -47,15 +47,6 @@ tag_files = {
     "Grade C": "Refurbished-StickerUpdated-Grade-C.png"
 }
 
-tag_size_percent = st.sidebar.slider(
-    "Tag Size (% of image width)",
-    min_value=8,
-    max_value=20,
-    value=15,
-    step=1,
-    help="Adjust the width of the refurbished tag relative to the product image"
-)
-
 show_bottom_banner = st.sidebar.checkbox(
     "Show condition banner at bottom",
     value=True,
@@ -66,8 +57,7 @@ st.sidebar.markdown("---")
 st.sidebar.info("""
 **Layout:**
 - Product image is scaled down to fit on the left
-- Tag overlays on the right side
-- Adjustable tag size (8-20% of canvas width)
+- Tag matches full image height on the right
 - Optional bottom condition banner
 - Output maintains original dimensions
 """)
@@ -144,13 +134,13 @@ with col2:
             canvas_width = orig_prod_width
             canvas_height = orig_prod_height
             
-            # Calculate tag size - make it proportional to canvas width
-            new_tag_width = int(canvas_width * (tag_size_percent / 100))
-            tag_aspect_ratio = tag_image.size[1] / tag_image.size[0]  # height/width
-            new_tag_height = int(new_tag_width * tag_aspect_ratio)
+            # Tag should match the full height of the canvas
+            new_tag_height = canvas_height
+            tag_aspect_ratio = tag_image.size[0] / tag_image.size[1]  # width/height
+            new_tag_width = int(new_tag_height * tag_aspect_ratio)
             
             # Scale down the product image to leave room for the tag
-            # Product should take up the remaining space (canvas width - tag width)
+            # Product should take up: canvas width - tag width
             available_width = canvas_width - new_tag_width
             
             # Scale product to fit in available width while maintaining aspect ratio
