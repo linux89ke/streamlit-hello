@@ -1,74 +1,188 @@
 import streamlit as st
-from PIL import Image, ImageDraw, ImageFont
-import io
+from PIL import Image
+import requests
+from io import BytesIO
+import numpy as np
 
-def add_renewed_tag(input_image):
-    # Open the image and convert to RGBA to handle transparency if needed
-    img = Image.open(input_image).convert("RGB")
-    draw = ImageDraw.Draw(img)
-    width, height = img.size
+# Page config
+st.set_page_config(
+    page_title="Refurbished Tag Generator",
+    page_icon="🏷️",
+    layout="wide"
+)
 
-    # 1. Define Tag Dimensions (Adjust these ratios as needed)
-    tag_width = int(width * 0.12)  # 12% of image width
-    tag_height = int(height * 0.75) # 75% of image height
+# Title and description
+st.title("🏷️ Refurbished Product Tag Generator")
+st.markdown("Upload a product image and add a refurbished grade tag to it!")
+
+# Sidebar for tag selection
+st.sidebar.header("Tag Settings")
+tag_type = st.sidebar.selectbox(
+    "Select Refurbished Grade:",
+    ["Renewed", "Grade A", "Grade B", "Grade C"]
+)
+
+# Tag file mapping
+tag_files = {
+    "Renewed": "/mnt/user-data/uploads/RefurbishedStickerUpdated-Renewd.png",
+    "Grade A": "/mnt/user-data/uploads/Refurbished-StickerUpdated-Grade-A.png",
+    "Grade B": "/mnt/user-data/uploads/Refurbished-StickerUpdated-Grade-B.png",
+    "Grade C": "/mnt/user-data/uploads/Refurbished-StickerUpdated-Grade-C.png"
+}
+
+# Tag size settings
+st.sidebar.header("Tag Size Settings")
+tag_width_percent = st.sidebar.slider(
+    "Tag Width (% of image width)",
+    min_value=10,
+    max_value=50,
+    value=25,
+    step=5
+)
+
+# Position settings
+st.sidebar.header("Position Settings")
+horizontal_position = st.sidebar.selectbox(
+    "Horizontal Position:",
+    ["Right", "Left"]
+)
+
+vertical_position = st.sidebar.selectbox(
+    "Vertical Position:",
+    ["Top", "Middle", "Bottom"]
+)
+
+# Padding settings
+horizontal_padding = st.sidebar.slider(
+    "Horizontal Padding (pixels)",
+    min_value=0,
+    max_value=100,
+    value=20,
+    step=5
+)
+
+vertical_padding = st.sidebar.slider(
+    "Vertical Padding (pixels)",
+    min_value=0,
+    max_value=100,
+    value=20,
+    step=5
+)
+
+# Main content area
+col1, col2 = st.columns(2)
+
+with col1:
+    st.subheader("📤 Upload Product Image")
     
-    # Position: Right side, vertically centered
-    x1 = width - tag_width
-    y1 = (height - tag_height) // 2
-    x2 = width
-    y2 = y1 + tag_height
-
-    # 2. Draw the Red Background
-    draw.rectangle([x1, y1, x2, y2], fill="#E31E24")
-
-    # 3. Add the "RENEWED" Text
-    # Note: You may need to provide a path to a .ttf font file on your system
-    try:
-        font_size = int(tag_width * 0.6)
-        font = ImageFont.truetype("arial.ttf", font_size)
-    except:
-        font = ImageFont.load_default()
-
-    # Create a separate canvas for the vertical text
-    text_str = "RENEWED"
-    # Calculate text size using a dummy image or textbbox
-    tw, th = draw.textbbox((0, 0), text_str, font=font)[2:]
-    
-    txt_img = Image.new("RGBA", (tw, th), (0, 0, 0, 0))
-    d = ImageDraw.Draw(txt_img)
-    d.text((0, 0), text_str, font=font, fill="white")
-    
-    # Rotate text 90 degrees and paste it onto the main image
-    rotated_txt = txt_img.rotate(90, expand=1)
-    
-    # Center the rotated text inside the red bar
-    paste_x = x1 + (tag_width - rotated_txt.width) // 2
-    paste_y = y1 + (tag_height - rotated_txt.height) // 2
-    img.paste(rotated_txt, (paste_x, paste_y), rotated_txt)
-
-    return img
-
-# --- Streamlit UI ---
-st.title("Laptop Tag Automator")
-st.write("Upload an image to automatically add the red 'RENEWED' banner.")
-
-uploaded_file = st.file_uploader("Choose a laptop image...", type=["jpg", "jpeg", "png"])
-
-if uploaded_file is not None:
-    # Process image
-    result_img = add_renewed_tag(uploaded_file)
-    
-    # Display side-by-side
-    st.image(result_img, caption="Processed Image", use_container_width=True)
-    
-    # Download button
-    buf = io.BytesIO()
-    result_img.save(buf, format="JPEG")
-    byte_im = buf.getvalue()
-    
-    st.download_button(
-        label="Download Tagged Image",
-        data=byte_im,
-        file_name="renewed_laptop.jpg",
-        mime="image/jpeg"
+    # Upload method selection
+    upload_method = st.radio(
+        "Choose upload method:",
+        ["Upload from device", "Load from URL"]
     )
+    
+    product_image = None
+    
+    if upload_method == "Upload from device":
+        uploaded_file = st.file_uploader(
+            "Choose an image file",
+            type=["png", "jpg", "jpeg", "webp"]
+        )
+        if uploaded_file is not None:
+            product_image = Image.open(uploaded_file).convert("RGBA")
+    
+    else:
+        image_url = st.text_input("Enter image URL:")
+        if image_url:
+            try:
+                response = requests.get(image_url)
+                product_image = Image.open(BytesIO(response.content)).convert("RGBA")
+                st.success("✅ Image loaded successfully!")
+            except Exception as e:
+                st.error(f"❌ Error loading image: {str(e)}")
+
+with col2:
+    st.subheader("✨ Preview")
+    
+    if product_image is not None:
+        # Load the selected tag
+        try:
+            tag_image = Image.open(tag_files[tag_type]).convert("RGBA")
+            
+            # Get original dimensions
+            prod_width, prod_height = product_image.size
+            
+            # Calculate new tag size based on percentage of image width
+            new_tag_width = int(prod_width * (tag_width_percent / 100))
+            tag_aspect_ratio = tag_image.size[1] / tag_image.size[0]
+            new_tag_height = int(new_tag_width * tag_aspect_ratio)
+            
+            # Resize tag
+            tag_resized = tag_image.resize((new_tag_width, new_tag_height), Image.Resampling.LANCZOS)
+            
+            # Calculate position
+            if horizontal_position == "Right":
+                x_position = prod_width - new_tag_width - horizontal_padding
+            else:  # Left
+                x_position = horizontal_padding
+            
+            if vertical_position == "Top":
+                y_position = vertical_padding
+            elif vertical_position == "Middle":
+                y_position = (prod_height - new_tag_height) // 2
+            else:  # Bottom
+                y_position = prod_height - new_tag_height - vertical_padding
+            
+            # Create a copy of the product image
+            result_image = product_image.copy()
+            
+            # Paste the tag onto the product image
+            result_image.paste(tag_resized, (x_position, y_position), tag_resized)
+            
+            # Display the result
+            st.image(result_image, use_container_width=True)
+            
+            # Download button
+            st.markdown("---")
+            
+            # Convert to RGB for JPEG or keep RGBA for PNG
+            output_format = st.selectbox("Output format:", ["PNG", "JPEG"])
+            
+            # Convert image to bytes
+            buf = BytesIO()
+            if output_format == "JPEG":
+                # Convert RGBA to RGB for JPEG
+                rgb_image = result_image.convert("RGB")
+                rgb_image.save(buf, format="JPEG", quality=95)
+                file_extension = "jpg"
+                mime_type = "image/jpeg"
+            else:
+                result_image.save(buf, format="PNG")
+                file_extension = "png"
+                mime_type = "image/png"
+            
+            buf.seek(0)
+            
+            st.download_button(
+                label=f"⬇️ Download Tagged Image ({output_format})",
+                data=buf,
+                file_name=f"refurbished_product_{tag_type.lower().replace(' ', '_')}.{file_extension}",
+                mime=mime_type,
+                use_container_width=True
+            )
+            
+        except Exception as e:
+            st.error(f"❌ Error processing image: {str(e)}")
+    else:
+        st.info("👆 Upload or provide a URL for a product image to get started!")
+
+# Footer
+st.markdown("---")
+st.markdown(
+    """
+    <div style='text-align: center; color: #666;'>
+    <p>💡 Tip: Adjust the tag size and position using the sidebar controls</p>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
