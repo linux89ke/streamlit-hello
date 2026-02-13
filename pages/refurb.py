@@ -56,10 +56,10 @@ show_bottom_banner = st.sidebar.checkbox(
 st.sidebar.markdown("---")
 st.sidebar.info("""
 **Layout:**
-- Product image is scaled down to fit on the left
-- Tag matches full image height on the right
-- Optional bottom condition banner
-- Output maintains original dimensions
+- Product centered in left area
+- Vertical tag on right side (full height)
+- Optional bottom banner (full width)
+- Clean, professional e-commerce layout
 """)
 
 # Main content area
@@ -120,82 +120,113 @@ with col2:
             
             # Get original dimensions
             orig_prod_width, orig_prod_height = product_image.size
-            tag_img_width, tag_img_height = tag_image.size
+            tag_full_width, tag_full_height = tag_image.size
             
-            # The tag images have a bottom banner (~15% of height)
-            # If user doesn't want the banner, crop it out
-            if not show_bottom_banner:
-                # Calculate banner height (approximately 15% of tag image)
-                banner_height = int(tag_img_height * 0.15)
-                # Crop the tag to remove bottom banner
-                tag_image = tag_image.crop((0, 0, tag_img_width, tag_img_height - banner_height))
+            # The tag images include both the vertical tag AND bottom banner
+            # We need to separate them
             
-            # Output canvas will be the original product dimensions
+            # Bottom banner is approximately 10% of the tag image height
+            banner_height = int(tag_full_height * 0.10)
+            
+            # Separate the vertical tag from the banner
+            vertical_tag = tag_image.crop((0, 0, tag_full_width, tag_full_height - banner_height))
+            bottom_banner = tag_image.crop((0, tag_full_height - banner_height, tag_full_width, tag_full_height))
+            
+            # Output canvas dimensions - we'll use original product dimensions as base
             canvas_width = orig_prod_width
             canvas_height = orig_prod_height
             
-            # Tag should match the full height of the canvas
-            new_tag_height = canvas_height
-            tag_aspect_ratio = tag_image.size[0] / tag_image.size[1]  # width/height
-            new_tag_width = int(new_tag_height * tag_aspect_ratio)
+            # Calculate vertical tag size (should be full height minus banner)
+            if show_bottom_banner:
+                available_height_for_tag = canvas_height - banner_height
+            else:
+                available_height_for_tag = canvas_height
             
-            # Ensure tag doesn't take up more than 25% of canvas width
-            max_tag_width = int(canvas_width * 0.25)
+            # Scale vertical tag to fit available height
+            tag_aspect_ratio = vertical_tag.size[0] / vertical_tag.size[1]  # width/height
+            new_tag_width = int(available_height_for_tag * tag_aspect_ratio)
+            new_tag_height = available_height_for_tag
+            
+            # Ensure tag doesn't exceed 30% of canvas width
+            max_tag_width = int(canvas_width * 0.30)
             if new_tag_width > max_tag_width:
                 new_tag_width = max_tag_width
                 new_tag_height = int(new_tag_width / tag_aspect_ratio)
             
-            # Scale down the product image to leave room for the tag
-            # Product should take up: canvas width - tag width
-            available_width = canvas_width - new_tag_width
+            # Resize the vertical tag
+            tag_resized = vertical_tag.resize((new_tag_width, new_tag_height), Image.Resampling.LANCZOS)
             
-            # Ensure we have at least some width for the product
-            if available_width < 100:
-                st.error("❌ Image is too small to fit both product and tag. Please upload a larger image.")
+            # Calculate available space for product (left side)
+            available_width_for_product = canvas_width - new_tag_width
+            
+            if available_width_for_product < 100:
+                st.error("❌ Image is too small. Please upload a larger image.")
                 st.stop()
             
-            # Scale product to fit in available width while maintaining aspect ratio
+            # Scale product to fit in the available area (left side, above banner if shown)
+            if show_bottom_banner:
+                available_height_for_product = canvas_height - banner_height
+            else:
+                available_height_for_product = canvas_height
+            
+            # Calculate product scaling
             product_aspect_ratio = orig_prod_height / orig_prod_width
-            new_prod_width = available_width
+            
+            # Try fitting by width first
+            new_prod_width = available_width_for_product
             new_prod_height = int(new_prod_width * product_aspect_ratio)
             
-            # If scaled height exceeds canvas height, scale based on height instead
-            if new_prod_height > canvas_height:
-                new_prod_height = canvas_height
+            # If too tall, fit by height instead
+            if new_prod_height > available_height_for_product:
+                new_prod_height = available_height_for_product
                 new_prod_width = int(new_prod_height / product_aspect_ratio)
             
-            # Final validation
+            # Validate dimensions
             if new_prod_width <= 0 or new_prod_height <= 0:
-                st.error("❌ Cannot fit product image. Please try a larger image.")
+                st.error("❌ Cannot fit product. Please try a larger image.")
                 st.stop()
             
-            # Resize product image
+            # Resize product
             product_resized = product_image.resize((new_prod_width, new_prod_height), Image.Resampling.LANCZOS)
             
-            # Resize tag to match canvas height
-            tag_resized = tag_image.resize((new_tag_width, new_tag_height), Image.Resampling.LANCZOS)
+            # Resize bottom banner to full canvas width if shown
+            if show_bottom_banner:
+                banner_resized = bottom_banner.resize((canvas_width, banner_height), Image.Resampling.LANCZOS)
             
-            # Create result image with original dimensions (white background for JPEG)
+            # Create result image with white background
             result_image = Image.new("RGB", (canvas_width, canvas_height), (255, 255, 255))
             
-            # Center the product vertically if needed
-            prod_y_position = (canvas_height - new_prod_height) // 2
-            
-            # Paste scaled product image on the left
-            if product_resized.mode == 'RGBA':
-                result_image.paste(product_resized, (0, prod_y_position), product_resized)
+            # Position product in the left area, centered vertically in available space
+            if show_bottom_banner:
+                prod_y_position = (canvas_height - banner_height - new_prod_height) // 2
             else:
-                result_image.paste(product_resized, (0, prod_y_position))
+                prod_y_position = (canvas_height - new_prod_height) // 2
             
-            # Calculate position for tag - align to right edge
+            prod_x_position = (available_width_for_product - new_prod_width) // 2
+            
+            # Paste product image
+            if product_resized.mode == 'RGBA':
+                result_image.paste(product_resized, (prod_x_position, prod_y_position), product_resized)
+            else:
+                result_image.paste(product_resized, (prod_x_position, prod_y_position))
+            
+            # Position vertical tag on the right side
             tag_x_position = canvas_width - new_tag_width
-            tag_y_position = 0  # Align to top
+            tag_y_position = 0
             
-            # Paste tag on top, overlaying the right side
+            # Paste vertical tag
             if tag_resized.mode == 'RGBA':
                 result_image.paste(tag_resized, (tag_x_position, tag_y_position), tag_resized)
             else:
                 result_image.paste(tag_resized, (tag_x_position, tag_y_position))
+            
+            # Paste bottom banner at the bottom (full width) if enabled
+            if show_bottom_banner:
+                banner_y_position = canvas_height - banner_height
+                if banner_resized.mode == 'RGBA':
+                    result_image.paste(banner_resized, (0, banner_y_position), banner_resized)
+                else:
+                    result_image.paste(banner_resized, (0, banner_y_position))
             
             # Display the result
             st.image(result_image, use_container_width=True)
