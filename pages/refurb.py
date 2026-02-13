@@ -139,9 +139,20 @@ with col2:
             tag_aspect_ratio = tag_image.size[0] / tag_image.size[1]  # width/height
             new_tag_width = int(new_tag_height * tag_aspect_ratio)
             
+            # Ensure tag doesn't take up more than 25% of canvas width
+            max_tag_width = int(canvas_width * 0.25)
+            if new_tag_width > max_tag_width:
+                new_tag_width = max_tag_width
+                new_tag_height = int(new_tag_width / tag_aspect_ratio)
+            
             # Scale down the product image to leave room for the tag
             # Product should take up: canvas width - tag width
             available_width = canvas_width - new_tag_width
+            
+            # Ensure we have at least some width for the product
+            if available_width < 100:
+                st.error("❌ Image is too small to fit both product and tag. Please upload a larger image.")
+                st.stop()
             
             # Scale product to fit in available width while maintaining aspect ratio
             product_aspect_ratio = orig_prod_height / orig_prod_width
@@ -152,6 +163,11 @@ with col2:
             if new_prod_height > canvas_height:
                 new_prod_height = canvas_height
                 new_prod_width = int(new_prod_height / product_aspect_ratio)
+            
+            # Final validation
+            if new_prod_width <= 0 or new_prod_height <= 0:
+                st.error("❌ Cannot fit product image. Please try a larger image.")
+                st.stop()
             
             # Resize product image
             product_resized = product_image.resize((new_prod_width, new_prod_height), Image.Resampling.LANCZOS)
