@@ -21,8 +21,8 @@ import numpy as np
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Refurbished Product Analyzer", page_icon="🔄", layout="wide")
-st.title("Refurbished Product Data Extractor")
-
+st.title("🔄 Refurbished Product Data Extractor & Analyzer")
+st.markdown("*Specialized scraper for refurbished/renewed product verification*")
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -265,6 +265,7 @@ def detect_refurbished_status(soup, product_name):
     search_scope = soup
     h1 = soup.find('h1')
     if h1:
+        # Traverse up to find the main wrapper (typically class 'col10' or generic row)
         possible_container = h1.find_parent('div', class_=re.compile(r'col10|-pvs|-p'))
         if possible_container:
             search_scope = possible_container
@@ -563,30 +564,61 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
         if rating_match:
             data['Product Rating'] = rating_match.group(1) + '/5'
     
-    # 12. Check for Description Images/Infographics (UPDATED LOGIC)
-    # Priority: Look for the standard 'markup' class used for rich descriptions
-    desc_section = soup.find('div', class_='markup')
+    # 12. Check for Description Images/Infographics (BULLETPROOF LOGIC)
+    # Search for the Jumia 'markup' class or standard 'product-desc'
+    # Use select for robust CSS class matching
+    desc_containers = soup.select('div.markup, div.product-desc, div.osh-content')
     
-    # Fallback: Look for any container with 'Product details' header
-    if not desc_section:
-        header = soup.find(['h2', 'div'], string=re.compile(r'Product details', re.I))
+    # Fallback: Look for the 'Product details' header container if class search fails
+    if not desc_containers:
+        header = soup.find(['h2', 'div'], string=re.compile(r'Product details|Description', re.I))
         if header:
-            desc_section = header.find_next('div')
+            # Usually content is in the next sibling div
+            sibling = header.find_next('div')
+            if sibling:
+                desc_containers.append(sibling)
 
     data['Has info-graphics'] = 'NO'
+    found_infographic = False
     
-    if desc_section:
-        desc_images = desc_section.find_all('img')
-        # Filter logic: Ignore tiny tracking pixels (1x1) often found in descriptions
-        count = 0
+    for container in desc_containers:
+        desc_images = container.find_all('img')
         for img in desc_images:
-            # Check if it's a real content image
-            src = img.get('data-src') or img.get('src', '')
-            if src and ('.jpg' in src or '.png' in src or '.jpeg' in src):
-                count += 1
-        
-        if count > 0:
-             data['Has info-graphics'] = 'YES'
+            src = img.get('data-src') or img.get('src') or ''
+            src_lower = src.lower()
+            
+            # Check for valid image content (including WEBP)
+            valid_ext = any(ext in src_lower for ext in ['.jpg', '.jpeg', '.png', '.webp'])
+            
+            # Filter out tiny tracking pixels/icons if dimensions exist
+            width = img.get('width')
+            height = img.get('height')
+            is_tiny = False
+            if width and height:
+                try:
+                    if int(width) < 50 or int(height) < 50:
+                        is_tiny = True
+                except:
+                    pass
+            
+            # Check against main product images to avoid double counting
+            is_main = False
+            if 'Image URLs' in data:
+                for main_img in data['Image URLs']:
+                    if main_img and main_img in src:
+                        is_main = True
+                        break
+            
+            if valid_ext and len(src) > 10 and not is_tiny and not is_main:
+                # Extra check: avoid UI elements
+                if 'icon' not in src_lower and 'star' not in src_lower and 'logo' not in src_lower:
+                    found_infographic = True
+                    break
+        if found_infographic:
+            break
+            
+    if found_infographic:
+         data['Has info-graphics'] = 'YES'
 
     return data
 
