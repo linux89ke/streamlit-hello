@@ -47,13 +47,19 @@ tag_files = {
     "Grade C": "Refurbished-StickerUpdated-Grade-C.png"
 }
 
+show_bottom_banner = st.sidebar.checkbox(
+    "Show condition banner at bottom",
+    value=True,
+    help="Display the condition text banner at the bottom of the image"
+)
+
 st.sidebar.markdown("---")
 st.sidebar.info("""
 **Layout:**
-- Product image positioned on the left
-- Refurbished tag on the right
-- Tag height matches product height
-- Clean, professional appearance
+- Tag overlays on the right side of the product
+- Tag height matches product height  
+- Optional bottom condition banner
+- Output maintains original product dimensions
 """)
 
 # Main content area
@@ -114,9 +120,17 @@ with col2:
             
             # Get original dimensions
             prod_width, prod_height = product_image.size
+            tag_img_width, tag_img_height = tag_image.size
+            
+            # The tag images have a bottom banner (~10% of height)
+            # If user doesn't want the banner, crop it out
+            if not show_bottom_banner:
+                # Calculate banner height (approximately 10% of tag image)
+                banner_height = int(tag_img_height * 0.15)
+                # Crop the tag to remove bottom banner
+                tag_image = tag_image.crop((0, 0, tag_img_width, tag_img_height - banner_height))
             
             # Calculate new tag size to match product height
-            # Tag height should be same as product height
             new_tag_height = prod_height
             tag_aspect_ratio = tag_image.size[0] / tag_image.size[1]  # width/height
             new_tag_width = int(new_tag_height * tag_aspect_ratio)
@@ -125,23 +139,27 @@ with col2:
             tag_resized = tag_image.resize((new_tag_width, new_tag_height), Image.Resampling.LANCZOS)
             
             # Create a new canvas that fits both product and tag side by side
-            total_width = prod_width + new_tag_width
-            total_height = prod_height
+            # Keep original product dimensions
+            result_width = prod_width
+            result_height = prod_height
             
             # Create new image with white background for JPEG compatibility
-            result_image = Image.new("RGB", (total_width, total_height), (255, 255, 255))
+            result_image = Image.new("RGB", (result_width, result_height), (255, 255, 255))
             
-            # Paste product image on the left
+            # Paste product image first
             if product_image.mode == 'RGBA':
                 result_image.paste(product_image, (0, 0), product_image)
             else:
                 result_image.paste(product_image, (0, 0))
             
-            # Paste tag on the right side
+            # Calculate position for tag - align to right edge
+            tag_x_position = prod_width - new_tag_width
+            
+            # Paste tag on top, overlaying the right side
             if tag_resized.mode == 'RGBA':
-                result_image.paste(tag_resized, (prod_width, 0), tag_resized)
+                result_image.paste(tag_resized, (tag_x_position, 0), tag_resized)
             else:
-                result_image.paste(tag_resized, (prod_width, 0))
+                result_image.paste(tag_resized, (tag_x_position, 0))
             
             # Display the result
             st.image(result_image, use_container_width=True)
