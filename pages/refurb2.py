@@ -7,12 +7,12 @@ import numpy as np
 # Page config
 st.set_page_config(
     page_title="Refurbished Tag Generator",
-    page_icon="🏷️",
+    page_icon="🔖",
     layout="wide"
 )
 
 # Title and description
-st.title("🏷️ Refurbished Product Tag Generator")
+st.title("Refurbished Tag Generator")
 st.markdown("Upload a product image and add a refurbished grade tag to it!")
 
 # Sidebar for tag selection
@@ -258,12 +258,12 @@ if processing_mode == "Single Image":
     col1, col2 = st.columns(2)
 
     with col1:
-        st.subheader("📤 Upload Product Image")
+        st.subheader("Upload Product Image")
         
         # Upload method selection
         upload_method = st.radio(
             "Choose upload method:",
-            ["Upload from device", "Load from URL", "Load from SKU"]
+            ["Upload from device", "Load from Image URL", "Load from SKU"]
         )
         
         product_image = None
@@ -276,15 +276,15 @@ if processing_mode == "Single Image":
             if uploaded_file is not None:
                 product_image = Image.open(uploaded_file).convert("RGBA")
         
-        elif upload_method == "Load from URL":
+        elif upload_method == "Load from Image URL":
             image_url = st.text_input("Enter image URL:")
             if image_url:
                 try:
                     response = requests.get(image_url)
                     product_image = Image.open(BytesIO(response.content)).convert("RGBA")
-                    st.success("✅ Image loaded successfully!")
+                    st.success("Image loaded successfully!")
                 except Exception as e:
-                    st.error(f"❌ Error loading image: {str(e)}")
+                    st.error(f"Error loading image: {str(e)}")
         
         else:  # Load from SKU
             sku_input = st.text_input(
@@ -307,16 +307,16 @@ if processing_mode == "Single Image":
                     base_url = "https://www.jumia.ug"
                     search_url = f"https://www.jumia.ug/catalog/?q={sku_input}"
                 
-                if st.button("🔍 Search and Extract Image", use_container_width=True):
+                if st.button("Search and Extract Image", use_container_width=True):
                     with st.spinner(f"Searching {jumia_site} for SKU..."):
                         product_image = search_jumia_by_sku(sku_input, base_url, search_url)
                         if product_image:
-                            st.success("✅ Image found and loaded successfully!")
+                            st.success("Image found and loaded successfully!")
                         else:
-                            st.error("❌ Could not find product with this SKU")
+                            st.error("Could not find product with this SKU")
 
     with col2:
-        st.subheader("✨ Preview")
+        st.subheader("Preview")
         
         if product_image is not None:
             # Process single image (existing logic)
@@ -326,7 +326,7 @@ if processing_mode == "Single Image":
                 tag_path = get_tag_path(tag_filename)
                 
                 if not os.path.exists(tag_path):
-                    st.error(f"❌ Tag file not found: {tag_filename}")
+                    st.error(f"Tag file not found: {tag_filename}")
                     st.info("""
                     **Please make sure the tag PNG files are in the same directory as this app.**
                     
@@ -403,7 +403,7 @@ if processing_mode == "Single Image":
                 buf.seek(0)
                 
                 st.download_button(
-                    label="⬇️ Download Tagged Image (JPEG)",
+                    label="Download Tagged Image (JPEG)",
                     data=buf,
                     file_name=f"refurbished_product_{tag_type.lower().replace(' ', '_')}.jpg",
                     mime="image/jpeg",
@@ -411,12 +411,12 @@ if processing_mode == "Single Image":
                 )
                 
             except Exception as e:
-                st.error(f"❌ Error processing image: {str(e)}")
+                st.error(f"Error processing image: {str(e)}")
         else:
-            st.info("👆 Upload or provide a URL for a product image to get started!")
+            st.info("Upload or provide a URL for a product image to get started!")
 
 else:  # Bulk Processing Mode
-    st.subheader("📦 Bulk Processing")
+    st.subheader("Bulk Processing")
     st.markdown("Process multiple products at once")
     
     bulk_method = st.radio(
@@ -434,14 +434,14 @@ else:  # Bulk Processing Mode
         )
         
         if uploaded_files:
-            st.info(f"✅ {len(uploaded_files)} files uploaded")
+            st.info(f"{len(uploaded_files)} files uploaded")
             for idx, uploaded_file in enumerate(uploaded_files):
                 try:
                     img = Image.open(uploaded_file).convert("RGBA")
                     filename = uploaded_file.name.rsplit('.', 1)[0]  # Remove extension
                     products_to_process.append((img, filename))
                 except Exception as e:
-                    st.warning(f"⚠️ Could not load {uploaded_file.name}: {str(e)}")
+                    st.warning(f"Could not load {uploaded_file.name}: {str(e)}")
     
     elif bulk_method == "Enter URLs manually":
         urls_input = st.text_area(
@@ -452,7 +452,7 @@ else:  # Bulk Processing Mode
         
         if urls_input.strip():
             urls = [url.strip() for url in urls_input.split('\n') if url.strip()]
-            st.info(f"📝 {len(urls)} URLs entered")
+            st.info(f"{len(urls)} URLs entered")
             
             for idx, url in enumerate(urls):
                 try:
@@ -462,7 +462,7 @@ else:  # Bulk Processing Mode
                     filename = f"image_{idx+1}"
                     products_to_process.append((img, filename))
                 except Exception as e:
-                    st.warning(f"⚠️ Could not load {url}: {str(e)}")
+                    st.warning(f"Could not load {url}: {str(e)}")
     
     elif bulk_method == "Upload Excel file with URLs":
         st.markdown("""
@@ -497,7 +497,7 @@ else:  # Bulk Processing Mode
                     else:
                         names = [f"product_{i+1}" for i in range(len(urls))]
                     
-                    st.info(f"📊 Found {len(urls)} URLs in Excel file")
+                    st.info(f"Found {len(urls)} URLs in Excel file")
                     
                     for idx, (url, name) in enumerate(zip(urls, names)):
                         try:
@@ -508,12 +508,12 @@ else:  # Bulk Processing Mode
                             clean_name = re.sub(r'[^\w\s-]', '', name).strip().replace(' ', '_')
                             products_to_process.append((img, clean_name or f"product_{idx+1}"))
                         except Exception as e:
-                            st.warning(f"⚠️ Could not load {name}: {str(e)}")
+                            st.warning(f"Could not load {name}: {str(e)}")
                 else:
-                    st.error("❌ Excel file appears to be empty")
+                    st.error("Excel file appears to be empty")
                     
             except Exception as e:
-                st.error(f"❌ Error reading Excel file: {str(e)}")
+                st.error(f"Error reading Excel file: {str(e)}")
     
     else:  # Enter SKUs
         skus_input = st.text_area(
@@ -531,9 +531,9 @@ else:  # Bulk Processing Mode
         
         if skus_input.strip():
             skus = [sku.strip() for sku in skus_input.split('\n') if sku.strip()]
-            st.info(f"📝 {len(skus)} SKUs entered")
+            st.info(f"{len(skus)} SKUs entered")
             
-            if st.button("🔍 Search All SKUs and Extract Images", use_container_width=True):
+            if st.button("Search All SKUs and Extract Images", use_container_width=True):
                 # Determine the base URL
                 if jumia_site_bulk == "Jumia Kenya":
                     base_url = "https://www.jumia.co.ke"
@@ -552,14 +552,14 @@ else:  # Bulk Processing Mode
                         filename = sku
                         products_to_process.append((img, filename))
                     else:
-                        st.warning(f"⚠️ Could not find image for SKU: {sku}")
+                        st.warning(f"Could not find image for SKU: {sku}")
                     
                     progress.progress((idx + 1) / len(skus))
                 
-                status_text.text(f"✅ Completed! Found {len(products_to_process)} images out of {len(skus)} SKUs")
+                status_text.text(f"Completed! Found {len(products_to_process)} images out of {len(skus)} SKUs")
     
     # Process button
-    if products_to_process and st.button("🚀 Process All Images", use_container_width=True):
+    if products_to_process and st.button("Process All Images", use_container_width=True):
         st.info(f"Processing {len(products_to_process)} images...")
         
         # Create a progress bar
@@ -573,7 +573,7 @@ else:  # Bulk Processing Mode
             tag_path = get_tag_path(tag_filename)
             
             if not os.path.exists(tag_path):
-                st.error(f"❌ Tag file not found: {tag_filename}")
+                st.error(f"Tag file not found: {tag_filename}")
                 st.stop()
             
             tag_image = Image.open(tag_path).convert("RGBA")
@@ -618,7 +618,7 @@ else:  # Bulk Processing Mode
                     processed_images.append((result_image, filename))
                     
                 except Exception as e:
-                    st.warning(f"⚠️ Error processing {filename}: {str(e)}")
+                    st.warning(f"Error processing {filename}: {str(e)}")
                 
                 # Update progress
                 progress_bar.progress((idx + 1) / len(products_to_process))
@@ -626,7 +626,7 @@ else:  # Bulk Processing Mode
             # Show results and download options
             if processed_images:
                 st.markdown("---")
-                st.success(f"✅ Successfully processed {len(processed_images)} images!")
+                st.success(f"Successfully processed {len(processed_images)} images!")
                 
                 # Create a zip file with all images
                 import zipfile
@@ -644,7 +644,7 @@ else:  # Bulk Processing Mode
                 zip_buffer.seek(0)
                 
                 st.download_button(
-                    label=f"📦 Download All {len(processed_images)} Images (ZIP)",
+                    label=f"Download All {len(processed_images)} Images (ZIP)",
                     data=zip_buffer,
                     file_name=f"refurbished_products_{tag_type.lower().replace(' ', '_')}.zip",
                     mime="application/zip",
@@ -661,20 +661,20 @@ else:  # Bulk Processing Mode
                 if len(processed_images) > 9:
                     st.info(f"Showing 9 of {len(processed_images)} processed images")
             else:
-                st.error("❌ No images were successfully processed")
+                st.error("No images were successfully processed")
                 
         except Exception as e:
-            st.error(f"❌ Error during processing: {str(e)}")
+            st.error(f"Error during processing: {str(e)}")
     
     elif not products_to_process:
-        st.info("👆 Please provide images to process")
+        st.info("Please provide images to process")
 
 # Footer
 st.markdown("---")
 st.markdown(
     """
     <div style='text-align: center; color: #666;'>
-    <p>💡 Tip: The tag will automatically scale to match your product image height</p>
+    <p>Tip: The tag will automatically scale to match your product image height</p>
     </div>
     """,
     unsafe_allow_html=True
