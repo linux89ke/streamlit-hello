@@ -31,14 +31,23 @@ processing_mode = st.sidebar.radio(
 
 st.sidebar.markdown("---")
 st.sidebar.header("Image Settings")
+
+# Initialize session state for tracking image changes
+if 'last_image_hash' not in st.session_state:
+    st.session_state.last_image_hash = None
+if 'image_scale_value' not in st.session_state:
+    st.session_state.image_scale_value = 100
+
 image_scale = st.sidebar.slider(
     "Product Image Size:",
     min_value=50,
     max_value=150,
-    value=100,
+    value=st.session_state.image_scale_value,
     step=5,
+    key="image_scale_slider",
     help="Adjust if product image appears too small or large. Default is 100%"
 )
+st.session_state.image_scale_value = image_scale
 st.sidebar.caption(f"Current size: {image_scale}%")
 
 # Tag file mapping - will check multiple locations
@@ -286,12 +295,26 @@ if processing_mode == "Single Image":
                 type=["png", "jpg", "jpeg", "webp"]
             )
             if uploaded_file is not None:
+                # Generate hash for the uploaded file to detect changes
+                import hashlib
+                file_hash = hashlib.md5(uploaded_file.getvalue()).hexdigest()
+                
+                # Reset slider if this is a new image
+                if st.session_state.last_image_hash != file_hash:
+                    st.session_state.last_image_hash = file_hash
+                    st.session_state.image_scale_value = 100
+                
                 product_image = Image.open(uploaded_file).convert("RGBA")
         
         elif upload_method == "Load from Image URL":
             image_url = st.text_input("Enter image URL:")
             if image_url:
                 try:
+                    # Reset slider if this is a new URL
+                    if st.session_state.last_image_hash != image_url:
+                        st.session_state.last_image_hash = image_url
+                        st.session_state.image_scale_value = 100
+                    
                     response = requests.get(image_url)
                     product_image = Image.open(BytesIO(response.content)).convert("RGBA")
                     st.success("Image loaded successfully!")
@@ -321,6 +344,12 @@ if processing_mode == "Single Image":
                 
                 if st.button("Search and Extract Image", use_container_width=True):
                     with st.spinner(f"Searching {jumia_site} for SKU..."):
+                        # Reset slider for new SKU search
+                        sku_hash = f"{sku_input}_{jumia_site}"
+                        if st.session_state.last_image_hash != sku_hash:
+                            st.session_state.last_image_hash = sku_hash
+                            st.session_state.image_scale_value = 100
+                        
                         product_image = search_jumia_by_sku(sku_input, base_url, search_url)
                         if product_image:
                             st.success("Image found and loaded successfully!")
