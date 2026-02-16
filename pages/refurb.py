@@ -19,7 +19,7 @@ st.markdown("Upload a product image and add a refurbished grade tag to it!")
 st.sidebar.header("Tag Settings")
 tag_type = st.sidebar.selectbox(
     "Select Refurbished Grade:",
-    ["Renewed", "Grade A", "Grade B", "Grade C"]
+    ["Renewed", "Refurbished", "Grade A", "Grade B", "Grade C"]
 )
 
 st.sidebar.markdown("---")
@@ -51,6 +51,7 @@ def get_tag_path(filename):
 
 tag_files = {
     "Renewed": "RefurbishedStickerUpdated-Renewd.png",
+    "Refurbished": "RefurbishedStickerUpdate-No-Grading.png",
     "Grade A": "Refurbished-StickerUpdated-Grade-A.png",
     "Grade B": "Refurbished-StickerUpdated-Grade-B.png",
     "Grade C": "Refurbished-StickerUpdated-Grade-C.png"
@@ -172,6 +173,7 @@ if processing_mode == "Single Image":
                     
                     Required files:
                     - RefurbishedStickerUpdated-Renewd.png
+                    - RefurbishedStickerUpdate-No-Grading.png
                     - Refurbished-StickerUpdated-Grade-A.png
                     - Refurbished-StickerUpdated-Grade-B.png
                     - Refurbished-StickerUpdated-Grade-C.png
