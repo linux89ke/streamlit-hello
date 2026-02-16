@@ -60,10 +60,25 @@ tag_files = {
 def extract_image_from_url(url):
     """Extract the main product image from a product page URL"""
     try:
+        # Enhanced headers to appear more like a real browser
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Cache-Control': 'max-age=0',
         }
-        response = requests.get(url, headers=headers, timeout=10)
+        
+        # Add a small delay to be respectful
+        import time
+        time.sleep(0.5)
+        
+        response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
         response.raise_for_status()
         
         soup = BeautifulSoup(response.content, 'html.parser')
@@ -76,22 +91,59 @@ def extract_image_from_url(url):
         if og_image and og_image.get('content'):
             image_url = og_image['content']
         
-        # Pattern 2: Look for main product image with common class names
+        # Pattern 2: Twitter card image
+        if not image_url:
+            twitter_image = soup.find('meta', attrs={'name': 'twitter:image'})
+            if twitter_image and twitter_image.get('content'):
+                image_url = twitter_image['content']
+        
+        # Pattern 3: Look for Jumia-specific patterns
+        if not image_url and 'jumia' in url.lower():
+            # Jumia uses specific classes for product images
+            jumia_img = soup.find('img', class_=lambda x: x and ('gallery' in x.lower() or 'main' in x.lower()))
+            if jumia_img:
+                image_url = jumia_img.get('src') or jumia_img.get('data-src')
+            
+            # Try finding in gallery div
+            if not image_url:
+                gallery_div = soup.find('div', class_=lambda x: x and 'gallery' in x.lower())
+                if gallery_div:
+                    img = gallery_div.find('img')
+                    if img:
+                        image_url = img.get('src') or img.get('data-src')
+        
+        # Pattern 4: Look for main product image with common class/id names
         if not image_url:
             img_tags = soup.find_all('img')
             for img in img_tags:
-                src = img.get('src') or img.get('data-src')
-                if src and any(keyword in src.lower() for keyword in ['product', 'main', 'large', 'zoom']):
-                    image_url = src
-                    break
+                src = img.get('src') or img.get('data-src') or img.get('data-lazy-src')
+                if src and any(keyword in src.lower() for keyword in ['product', 'main', 'large', 'zoom', 'gallery']):
+                    # Skip small thumbnails
+                    if 'thumb' not in src.lower() and 'icon' not in src.lower():
+                        image_url = src
+                        break
         
-        # Pattern 3: First large image
+        # Pattern 5: First reasonably sized image (fallback)
         if not image_url:
             for img in soup.find_all('img'):
-                src = img.get('src') or img.get('data-src')
-                if src and not any(x in src.lower() for x in ['logo', 'icon', 'banner', 'sprite']):
-                    image_url = src
-                    break
+                src = img.get('src') or img.get('data-src') or img.get('data-lazy-src')
+                if src and not any(x in src.lower() for x in ['logo', 'icon', 'banner', 'sprite', 'thumb']):
+                    # Check if it has reasonable dimensions indicated in attributes
+                    width = img.get('width', '')
+                    height = img.get('height', '')
+                    try:
+                        if width and height:
+                            w, h = int(width), int(height)
+                            if w > 200 and h > 200:  # Reasonable product image size
+                                image_url = src
+                                break
+                    except:
+                        pass
+                    
+                    # If no dimensions, check if URL suggests it's a product image
+                    if any(keyword in src for keyword in ['.jpg', '.jpeg', '.png', '.webp']):
+                        image_url = src
+                        break
         
         if image_url:
             # Make sure URL is absolute
@@ -102,13 +154,30 @@ def extract_image_from_url(url):
                 parsed = urlparse(url)
                 image_url = f"{parsed.scheme}://{parsed.netloc}{image_url}"
             
-            # Download the image
-            img_response = requests.get(image_url, headers=headers, timeout=10)
+            # Download the image with enhanced headers
+            img_headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Referer': url,  # Important: tell the server where we're coming from
+                'Sec-Fetch-Dest': 'image',
+                'Sec-Fetch-Mode': 'no-cors',
+                'Sec-Fetch-Site': 'same-origin',
+            }
+            
+            img_response = requests.get(image_url, headers=img_headers, timeout=15, allow_redirects=True)
             img_response.raise_for_status()
             return Image.open(BytesIO(img_response.content)).convert("RGBA")
         else:
+            st.warning("Could not find product image on the page. Try using the direct image URL instead.")
             return None
             
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 403:
+            st.error(f"⚠️ Access denied (403). This website blocks automated requests. Please try:\n1. Right-click the product image → 'Copy image address'\n2. Use 'Load from URL' option with the image URL directly")
+        else:
+            st.error(f"HTTP Error: {str(e)}")
+        return None
     except Exception as e:
         st.error(f"Error extracting image: {str(e)}")
         return None
