@@ -57,91 +57,90 @@ tag_files = {
     "Grade C": "Refurbished-StickerUpdated-Grade-C.png"
 }
 
-def extract_image_from_url(url):
-    """Extract the main product image from a product page URL"""
+def search_jumia_by_sku(sku, base_url, search_url):
+    """Search Jumia by SKU and extract the first product image"""
     try:
-        # Enhanced headers to appear more like a real browser
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
             'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Cache-Control': 'max-age=0',
         }
         
-        # Add a small delay to be respectful
-        import time
-        time.sleep(0.5)
-        
-        response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
+        # First, search for the SKU
+        response = requests.get(search_url, headers=headers, timeout=15)
         response.raise_for_status()
         
         soup = BeautifulSoup(response.content, 'html.parser')
         
-        # Try multiple common patterns for product images
+        # Look for product links in search results
+        # Jumia typically uses article tags or divs with product cards
+        product_link = None
+        
+        # Method 1: Look for links containing the SKU
+        all_links = soup.find_all('a', href=True)
+        for link in all_links:
+            href = link['href']
+            if sku.lower() in href.lower() and '.html' in href:
+                product_link = href
+                break
+        
+        # Method 2: Look for first product in search results
+        if not product_link:
+            # Find article or product card
+            product_cards = soup.find_all('article', class_=lambda x: x and 'prd' in x.lower())
+            if not product_cards:
+                product_cards = soup.find_all('a', class_=lambda x: x and 'core' in x.lower())
+            
+            if product_cards:
+                for card in product_cards:
+                    link = card.find('a', href=True) if card.name != 'a' else card
+                    if link and link.get('href'):
+                        href = link['href']
+                        if '.html' in href or '/product/' in href:
+                            product_link = href
+                            break
+        
+        if not product_link:
+            st.warning(f"Could not find product with SKU: {sku}")
+            return None
+        
+        # Make sure the product link is absolute
+        if product_link.startswith('/'):
+            product_link = base_url + product_link
+        elif not product_link.startswith('http'):
+            product_link = base_url + '/' + product_link
+        
+        # Now get the product page
+        product_response = requests.get(product_link, headers=headers, timeout=15)
+        product_response.raise_for_status()
+        
+        product_soup = BeautifulSoup(product_response.content, 'html.parser')
+        
+        # Extract image from product page
         image_url = None
         
-        # Pattern 1: og:image meta tag (most common)
-        og_image = soup.find('meta', property='og:image')
+        # Method 1: og:image meta tag
+        og_image = product_soup.find('meta', property='og:image')
         if og_image and og_image.get('content'):
             image_url = og_image['content']
         
-        # Pattern 2: Twitter card image
+        # Method 2: Look for main gallery image
         if not image_url:
-            twitter_image = soup.find('meta', attrs={'name': 'twitter:image'})
-            if twitter_image and twitter_image.get('content'):
-                image_url = twitter_image['content']
+            gallery = product_soup.find('div', class_=lambda x: x and 'gallery' in x.lower())
+            if gallery:
+                img = gallery.find('img')
+                if img:
+                    image_url = img.get('src') or img.get('data-src')
         
-        # Pattern 3: Look for Jumia-specific patterns
-        if not image_url and 'jumia' in url.lower():
-            # Jumia uses specific classes for product images
-            jumia_img = soup.find('img', class_=lambda x: x and ('gallery' in x.lower() or 'main' in x.lower()))
-            if jumia_img:
-                image_url = jumia_img.get('src') or jumia_img.get('data-src')
-            
-            # Try finding in gallery div
-            if not image_url:
-                gallery_div = soup.find('div', class_=lambda x: x and 'gallery' in x.lower())
-                if gallery_div:
-                    img = gallery_div.find('img')
-                    if img:
-                        image_url = img.get('src') or img.get('data-src')
-        
-        # Pattern 4: Look for main product image with common class/id names
+        # Method 3: Find largest image
         if not image_url:
-            img_tags = soup.find_all('img')
-            for img in img_tags:
-                src = img.get('src') or img.get('data-src') or img.get('data-lazy-src')
-                if src and any(keyword in src.lower() for keyword in ['product', 'main', 'large', 'zoom', 'gallery']):
-                    # Skip small thumbnails
-                    if 'thumb' not in src.lower() and 'icon' not in src.lower():
-                        image_url = src
-                        break
-        
-        # Pattern 5: First reasonably sized image (fallback)
-        if not image_url:
-            for img in soup.find_all('img'):
-                src = img.get('src') or img.get('data-src') or img.get('data-lazy-src')
-                if src and not any(x in src.lower() for x in ['logo', 'icon', 'banner', 'sprite', 'thumb']):
-                    # Check if it has reasonable dimensions indicated in attributes
-                    width = img.get('width', '')
-                    height = img.get('height', '')
-                    try:
-                        if width and height:
-                            w, h = int(width), int(height)
-                            if w > 200 and h > 200:  # Reasonable product image size
-                                image_url = src
-                                break
-                    except:
-                        pass
-                    
-                    # If no dimensions, check if URL suggests it's a product image
-                    if any(keyword in src for keyword in ['.jpg', '.jpeg', '.png', '.webp']):
+            all_images = product_soup.find_all('img')
+            for img in all_images:
+                src = img.get('src') or img.get('data-src')
+                if src and not any(x in src.lower() for x in ['logo', 'icon', 'banner', 'thumb']):
+                    # Check if it looks like a product image
+                    if 'product' in src.lower() or 'jumia.is' in src.lower():
                         image_url = src
                         break
         
@@ -150,36 +149,28 @@ def extract_image_from_url(url):
             if image_url.startswith('//'):
                 image_url = 'https:' + image_url
             elif image_url.startswith('/'):
-                from urllib.parse import urlparse
-                parsed = urlparse(url)
-                image_url = f"{parsed.scheme}://{parsed.netloc}{image_url}"
+                image_url = base_url + image_url
             
-            # Download the image with enhanced headers
+            # Download the image
             img_headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Referer': url,  # Important: tell the server where we're coming from
-                'Sec-Fetch-Dest': 'image',
-                'Sec-Fetch-Mode': 'no-cors',
-                'Sec-Fetch-Site': 'same-origin',
+                'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+                'Referer': product_link,
             }
             
-            img_response = requests.get(image_url, headers=img_headers, timeout=15, allow_redirects=True)
+            img_response = requests.get(image_url, headers=img_headers, timeout=15)
             img_response.raise_for_status()
+            
             return Image.open(BytesIO(img_response.content)).convert("RGBA")
         else:
-            st.warning("Could not find product image on the page. Try using the direct image URL instead.")
+            st.warning("Found product but could not extract image")
             return None
             
-    except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 403:
-            st.error(f"⚠️ Access denied (403). This website blocks automated requests. Please try:\n1. Right-click the product image → 'Copy image address'\n2. Use 'Load from URL' option with the image URL directly")
-        else:
-            st.error(f"HTTP Error: {str(e)}")
+    except requests.exceptions.RequestException as e:
+        st.error(f"Network error: {str(e)}")
         return None
     except Exception as e:
-        st.error(f"Error extracting image: {str(e)}")
+        st.error(f"Error searching Jumia: {str(e)}")
         return None
 
 # Main content area
@@ -192,7 +183,7 @@ if processing_mode == "Single Image":
         # Upload method selection
         upload_method = st.radio(
             "Choose upload method:",
-            ["Upload from device", "Load from URL", "Extract from product page"]
+            ["Upload from device", "Load from URL", "Load from SKU"]
         )
         
         product_image = None
@@ -215,15 +206,49 @@ if processing_mode == "Single Image":
                 except Exception as e:
                     st.error(f"❌ Error loading image: {str(e)}")
         
-        else:  # Extract from product page
-            product_url = st.text_input("Enter product page URL (e.g., Jumia, Amazon):")
-            if product_url:
-                with st.spinner("Extracting main product image..."):
-                    product_image = extract_image_from_url(product_url)
-                    if product_image:
-                        st.success("✅ Image extracted successfully!")
-                    else:
-                        st.error("❌ Could not extract image from this URL")
+        else:  # Load from SKU
+            sku_input = st.text_input(
+                "Enter Product SKU:",
+                placeholder="e.g., GE840EA6C62GANAFAMZ",
+                help="Enter the Jumia SKU/product code"
+            )
+            
+            jumia_site = st.radio(
+                "Select Jumia Site:",
+                ["Jumia Kenya", "Jumia Uganda"],
+                horizontal=True
+            )
+            
+            # Add helper instructions
+            with st.expander("💡 Where to find the SKU?"):
+                st.markdown("""
+                **Finding the SKU on Jumia:**
+                
+                1. Go to any Jumia product page
+                2. Look at the URL - the SKU is usually at the end
+                3. Example URL: `https://www.jumia.co.ke/product-name-**GE840EA6C62GANAFAMZ**.html`
+                4. The SKU is: **GE840EA6C62GANAFAMZ**
+                
+                Or look for "SKU" in the product details section on the page.
+                """)
+            
+            if sku_input:
+                # Determine the base URL
+                if jumia_site == "Jumia Kenya":
+                    base_url = "https://www.jumia.co.ke"
+                    search_url = f"https://www.jumia.co.ke/catalog/?q={sku_input}"
+                else:
+                    base_url = "https://www.jumia.ug"
+                    search_url = f"https://www.jumia.ug/catalog/?q={sku_input}"
+                
+                if st.button("🔍 Search and Extract Image", use_container_width=True):
+                    with st.spinner(f"Searching {jumia_site} for SKU..."):
+                        product_image = search_jumia_by_sku(sku_input, base_url, search_url)
+                        if product_image:
+                            st.success("✅ Image found and loaded successfully!")
+                        else:
+                            st.error("❌ Could not find product with this SKU")
+                            st.info("💡 **Try these alternatives:**\n- Verify the SKU is correct\n- Try the other Jumia site\n- Use 'Load from URL' with the direct image link")
 
     with col2:
         st.subheader("✨ Preview")
@@ -331,7 +356,7 @@ else:  # Bulk Processing Mode
     
     bulk_method = st.radio(
         "Choose bulk input method:",
-        ["Upload multiple images", "Enter URLs manually", "Upload Excel file with URLs", "Extract from product pages"]
+        ["Upload multiple images", "Enter URLs manually", "Upload Excel file with URLs", "Enter SKUs"]
     )
     
     products_to_process = []  # List of (image, filename) tuples
@@ -425,22 +450,48 @@ else:  # Bulk Processing Mode
             except Exception as e:
                 st.error(f"❌ Error reading Excel file: {str(e)}")
     
-    else:  # Extract from product pages
-        urls_input = st.text_area(
-            "Enter product page URLs (one per line):",
+    else:  # Enter SKUs
+        skus_input = st.text_area(
+            "Enter Product SKUs (one per line):",
             height=200,
-            placeholder="https://www.jumia.co.ke/product-1\nhttps://www.jumia.co.ke/product-2\nhttps://www.amazon.com/product-3"
+            placeholder="GE840EA6C62GANAFAMZ\nAP456EA7D89HANAFAMZ\nXY123EA4B56CANAFAMZ"
         )
         
-        if urls_input.strip():
-            urls = [url.strip() for url in urls_input.split('\n') if url.strip()]
-            st.info(f"🔗 {len(urls)} product URLs entered")
+        jumia_site_bulk = st.radio(
+            "Select Jumia Site:",
+            ["Jumia Kenya", "Jumia Uganda"],
+            horizontal=True,
+            key="bulk_jumia_site"
+        )
+        
+        if skus_input.strip():
+            skus = [sku.strip() for sku in skus_input.split('\n') if sku.strip()]
+            st.info(f"📝 {len(skus)} SKUs entered")
             
-            for idx, url in enumerate(urls):
-                img = extract_image_from_url(url)
-                if img:
-                    filename = f"product_{idx+1}"
-                    products_to_process.append((img, filename))
+            if st.button("🔍 Search All SKUs and Extract Images", use_container_width=True):
+                # Determine the base URL
+                if jumia_site_bulk == "Jumia Kenya":
+                    base_url = "https://www.jumia.co.ke"
+                else:
+                    base_url = "https://www.jumia.ug"
+                
+                progress = st.progress(0)
+                status_text = st.empty()
+                
+                for idx, sku in enumerate(skus):
+                    status_text.text(f"Processing SKU {idx+1}/{len(skus)}: {sku}")
+                    search_url = f"{base_url}/catalog/?q={sku}"
+                    
+                    img = search_jumia_by_sku(sku, base_url, search_url)
+                    if img:
+                        filename = sku
+                        products_to_process.append((img, filename))
+                    else:
+                        st.warning(f"⚠️ Could not find image for SKU: {sku}")
+                    
+                    progress.progress((idx + 1) / len(skus))
+                
+                status_text.text(f"✅ Completed! Found {len(products_to_process)} images out of {len(skus)} SKUs")
     
     # Process button
     if products_to_process and st.button("🚀 Process All Images", use_container_width=True):
