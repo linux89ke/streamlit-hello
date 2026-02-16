@@ -12,7 +12,7 @@ st.set_page_config(
 )
 
 # Title and description
-st.title("Refurbished Tag Generator")
+st.title("Refurbished Product Tag Generator")
 st.markdown("Upload a product image and add a refurbished grade tag to it!")
 
 # Sidebar for tag selection
@@ -28,6 +28,18 @@ processing_mode = st.sidebar.radio(
     "Choose mode:",
     ["Single Image", "Bulk Processing"]
 )
+
+st.sidebar.markdown("---")
+st.sidebar.header("Image Settings")
+image_scale = st.sidebar.slider(
+    "Product Image Size:",
+    min_value=50,
+    max_value=150,
+    value=100,
+    step=5,
+    help="Adjust if product image appears too small or large. Default is 100%"
+)
+st.sidebar.caption(f"Current size: {image_scale}%")
 
 # Tag file mapping - will check multiple locations
 import os
@@ -353,10 +365,11 @@ if processing_mode == "Single Image":
                 available_width = canvas_width - vert_tag_width
                 available_height = canvas_height - banner_height
                 
-                # Scale product with padding
+                # Scale product with padding and user-defined scale
                 padding_factor = 0.74
-                fit_width = int(available_width * padding_factor)
-                fit_height = int(available_height * padding_factor)
+                scale_multiplier = image_scale / 100.0  # Convert percentage to multiplier
+                fit_width = int(available_width * padding_factor * scale_multiplier)
+                fit_height = int(available_height * padding_factor * scale_multiplier)
                 
                 product_aspect_ratio = orig_prod_height / orig_prod_width
                 
@@ -583,8 +596,9 @@ else:  # Bulk Processing Mode
             available_width = canvas_width - vert_tag_width
             available_height = canvas_height - banner_height
             padding_factor = 0.74
-            fit_width = int(available_width * padding_factor)
-            fit_height = int(available_height * padding_factor)
+            scale_multiplier = image_scale / 100.0
+            fit_width = int(available_width * padding_factor * scale_multiplier)
+            fit_height = int(available_height * padding_factor * scale_multiplier)
             
             for idx, (product_image, filename) in enumerate(products_to_process):
                 try:
