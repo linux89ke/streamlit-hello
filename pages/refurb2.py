@@ -729,9 +729,9 @@ else:  # Bulk Processing Mode
                         for img, name in processed_images:
                             img_buffer = BytesIO()
                             img.save(img_buffer, format='JPEG', quality=95)
-                            # Use exact filename without adding tag type suffix
+                            # Add _1 suffix to all filenames
                             zip_file.writestr(
-                                f"{name}.jpg",
+                                f"{name}_1.jpg",
                                 img_buffer.getvalue()
                             )
                     
