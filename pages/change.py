@@ -124,35 +124,68 @@ def process_single(product_image: Image.Image,
     return fit_with_margin(cropped, tag_image)
 
 
+def detect_tag_boundaries(image: Image.Image):
+    """
+    Auto-detect where the old tag strips are by scanning pixels.
+    - Right strip: finds leftmost column with red pixels in rightmost 30%
+    - Bottom banner: finds topmost non-white pixel in bottom 25%
+      (catches both the red bar AND any icons/text above it)
+    Returns (strip_left_x, banner_top_y).
+    """
+    img_rgb = image.convert("RGB")
+    w, h = img_rgb.size
+
+    def is_red(r, g, b):
+        return r > 150 and g < 80 and b < 80
+
+    def is_non_white(r, g, b):
+        return not (r > 230 and g > 230 and b > 230)
+
+    # Right strip: scan rightmost 30% of image columns
+    strip_left = w - int(w * VERT_STRIP_RATIO)  # fallback
+    for x in range(w - 1, int(w * 0.70), -1):
+        if any(is_red(*img_rgb.getpixel((x, y))) for y in range(h)):
+            strip_left = x
+        else:
+            if strip_left < w - 1:
+                break
+
+    # Bottom banner: find topmost non-white pixel in bottom 25%
+    # This catches the red bar + any icons/text (like the shield) above it
+    banner_top = h - int(h * BANNER_RATIO)  # fallback
+    for y in range(int(h * 0.75), h):
+        if any(is_non_white(*img_rgb.getpixel((x, y))) for x in range(strip_left)):
+            banner_top = y
+            break
+
+    return strip_left, banner_top
+
+
 def strip_and_retag(tagged_image: Image.Image,
                     new_tag_image: Image.Image) -> Image.Image:
     """
     Convert a tagged image to a new tag grade.
 
-    Strategy:
-    1. Crop the safe zone (untouched product area — excludes the right
-       strip and bottom banner where the old tag lived)
-    2. Place it back on a clean full-size white canvas so the product
-       sits at its original position — old tag pixels are gone
-    3. Overlay the new tag on top
-
-    Works well for Jumia images because products are centred on white,
-    so the tag strips almost always cover background, not product pixels.
+    1. Auto-detect the tag strip boundaries by pixel scanning
+    2. White-out the right strip and entire bottom region (including icons/text)
+    3. Overlay the new tag — zero remnants of the old tag
     """
-    w, h = tagged_image.size
+    from PIL import ImageDraw
+    img_rgb = tagged_image.convert("RGB")
+    w, h = img_rgb.size
 
-    # Pixel boundaries of the safe zone (never touched by the old tag)
-    safe_w = w - int(w * VERT_STRIP_RATIO)
-    safe_h = h - int(h * BANNER_RATIO)
+    strip_left, banner_top = detect_tag_boundaries(img_rgb)
 
-    # Step 1: Clean white canvas at the original full size
-    clean_canvas = Image.new("RGB", (w, h), (255, 255, 255))
+    clean_canvas = img_rgb.copy()
+    draw = ImageDraw.Draw(clean_canvas)
 
-    # Step 2: Paste only the safe zone — right strip + bottom banner stay white
-    safe_zone = tagged_image.crop((0, 0, safe_w, safe_h))
-    clean_canvas.paste(safe_zone, (0, 0))
+    # Wipe right vertical strip
+    draw.rectangle([strip_left, 0, w, h], fill=(255, 255, 255))
 
-    # Step 3: Overlay new tag on top
+    # Wipe entire bottom region (red bar + icon + text)
+    draw.rectangle([0, banner_top, w, h], fill=(255, 255, 255))
+
+    # Overlay the new tag
     if new_tag_image.mode == "RGBA":
         clean_canvas.paste(new_tag_image, (0, 0), new_tag_image)
     else:
