@@ -41,7 +41,7 @@ if 'image_scale_value' not in st.session_state:
 image_scale = st.sidebar.slider(
     "Product Image Size:",
     min_value=50,
-    max_value=200,
+    max_value=150,
     value=st.session_state.image_scale_value,
     step=5,
     key="image_scale_slider",
@@ -635,7 +635,7 @@ else:  # Bulk Processing Mode
                         scale = st.slider(
                             "Size %",
                             min_value=50,
-                            max_value=200,
+                            max_value=150,
                             value=st.session_state.individual_scales[key],
                             step=5,
                             key=f"slider_{key}",
