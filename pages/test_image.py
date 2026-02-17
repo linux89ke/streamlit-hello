@@ -13,7 +13,7 @@ from bs4 import BeautifulSoup
 # ══════════════════════════════════════════════════════════════════════════════
 
 # How far from the tag borders the product will sit (8% of the safe zone)
-MARGIN_PERCENT = 0.15
+MARGIN_PERCENT = 0.12
 
 # Safe zone definition (matches your tag template layout)
 BANNER_RATIO     = 0.095   # bottom banner height as fraction of canvas height
@@ -49,13 +49,6 @@ processing_mode = st.sidebar.radio(
 )
 
 st.sidebar.markdown("---")
-st.sidebar.markdown(
-    "**How it works:**\n\n"
-    "1. Whitespace is automatically trimmed from the product image\n"
-    "2. Product is scaled to fill the tag's safe zone\n"
-    "3. A 15% margin keeps it clear of all borders\n\n"
-    "_No manual adjustments needed!_"
-)
 
 # ── Tag file mapping ───────────────────────────────────────────────────────────
 tag_files = {
@@ -369,7 +362,7 @@ if processing_mode == "Single Image":
             result    = process_single(product_image, tag_image)
 
             st.image(result, use_container_width=True,
-                     caption=f"{tag_type} · auto-fitted with 15% margin")
+                     caption=f"{tag_type} · auto-fitted with 12% margin")
 
             st.markdown("---")
             st.download_button(
@@ -539,7 +532,7 @@ else:
 st.markdown("---")
 st.markdown(
     "<div style='text-align:center;color:#888'>"
-    "Auto-crop trims whitespace · 15% margin keeps product clear of tag borders"
+    "Auto-crop trims whitespace · 12% margin keeps product clear of tag borders"
     "</div>",
     unsafe_allow_html=True,
 )
