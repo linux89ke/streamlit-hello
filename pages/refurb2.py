@@ -1,21 +1,33 @@
+import os
+import re
+import zipfile
+import hashlib
+
 import streamlit as st
-from PIL import Image
+from PIL import Image, ImageOps
 import requests
 from io import BytesIO
-import numpy as np
 
-# Page config
+# ── streamlit-cropper (install with: pip install streamlit-cropper) ───────────
+try:
+    from streamlit_cropper import st_cropper
+    CROPPER_AVAILABLE = True
+except ImportError:
+    CROPPER_AVAILABLE = False
+
+from bs4 import BeautifulSoup
+
+# ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Refurbished Tag Generator",
     page_icon="🔖",
     layout="wide"
 )
 
-# Title and description
 st.title("Refurbished Product Tag Generator")
 st.markdown("Upload a product image and add a refurbished grade tag to it!")
 
-# Sidebar for tag selection
+# ── Sidebar ────────────────────────────────────────────────────────────────────
 st.sidebar.header("Tag Settings")
 tag_type = st.sidebar.selectbox(
     "Select Refurbished Grade:",
@@ -29,119 +41,109 @@ processing_mode = st.sidebar.radio(
     ["Single Image", "Bulk Processing"]
 )
 
-st.sidebar.markdown("---")
-st.sidebar.header("Image Settings")
-
-# --- ZOOM SLIDER replaces old "Image Scale" slider ---
-# 1.0 = Best Fit (fills safe zone exactly). >1.0 zooms in, <1.0 zooms out.
-zoom_level = st.sidebar.slider(
-    "🔍 Zoom",
-    min_value=0.5,
-    max_value=2.0,
-    value=1.0,
-    step=0.05,
-    help="1.0 = Best Fit (auto-fills the safe zone). Drag right to zoom in, left to zoom out."
-)
-st.sidebar.caption(f"Zoom: {zoom_level:.2f}x {'(Best Fit)' if zoom_level == 1.0 else '(zoomed in)' if zoom_level > 1.0 else '(zoomed out)'}")
-
-# Tag file mapping - will check multiple locations
-import os
-import re
-from bs4 import BeautifulSoup
+# ── Tag file mapping ───────────────────────────────────────────────────────────
+tag_files = {
+    "Renewed":      "RefurbishedStickerUpdated-Renewd.png",
+    "Refurbished":  "RefurbishedStickerUpdate-No-Grading.png",
+    "Grade A":      "Refurbished-StickerUpdated-Grade-A.png",
+    "Grade B":      "Refurbished-StickerUpdated-Grade-B.png",
+    "Grade C":      "Refurbished-StickerUpdated-Grade-C.png",
+}
 
 def get_tag_path(filename):
-    """Check multiple possible locations for tag files"""
-    possible_paths = [
-        filename,
-        os.path.join(os.path.dirname(__file__), filename),
-        os.path.join(os.getcwd(), filename),
-    ]
-    for path in possible_paths:
+    for path in [filename,
+                 os.path.join(os.path.dirname(__file__), filename),
+                 os.path.join(os.getcwd(), filename)]:
         if os.path.exists(path):
             return path
     return filename
 
-tag_files = {
-    "Renewed": "RefurbishedStickerUpdated-Renewd.png",
-    "Refurbished": "RefurbishedStickerUpdate-No-Grading.png",
-    "Grade A": "Refurbished-StickerUpdated-Grade-A.png",
-    "Grade B": "Refurbished-StickerUpdated-Grade-B.png",
-    "Grade C": "Refurbished-StickerUpdated-Grade-C.png"
-}
 
-
-def best_fit_size(product_image, available_width, available_height):
+# ── Core compositing ───────────────────────────────────────────────────────────
+def auto_crop_whitespace(image: Image.Image, padding: int = 10) -> Image.Image:
     """
-    Calculate the maximum size a product image can be while fitting
-    entirely within the safe zone. This is the 'Best Fit' at zoom=1.0.
+    Automatically trim surrounding whitespace/transparency from an image.
+    Works on both transparent PNGs and white-background JPEGs.
+    padding: pixels of breathing room to leave around the detected product.
     """
-    orig_w, orig_h = product_image.size
-    aspect = orig_h / orig_w
+    img = image.convert("RGBA")
+    # Create a white background to detect whitespace
+    bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
+    diff = Image.new("RGBA", img.size)
 
-    # Fit by width first
-    new_w = available_width
-    new_h = int(new_w * aspect)
+    # Find non-white pixels
+    img_rgb = img.convert("RGB")
+    bbox = None
 
-    # If too tall, fit by height instead
-    if new_h > available_height:
-        new_h = available_height
-        new_w = int(new_h / aspect)
+    pixels = list(img_rgb.getdata())
+    w, h = img_rgb.size
+    non_white = [(i % w, i // w) for i, p in enumerate(pixels)
+                 if not (p[0] > 240 and p[1] > 240 and p[2] > 240)]
 
-    return new_w, new_h
+    if non_white:
+        xs = [p[0] for p in non_white]
+        ys = [p[1] for p in non_white]
+        left   = max(0, min(xs) - padding)
+        top    = max(0, min(ys) - padding)
+        right  = min(w, max(xs) + padding)
+        bottom = min(h, max(ys) + padding)
+        bbox = (left, top, right, bottom)
+
+    if bbox:
+        return image.crop(bbox)
+    return image  # fallback: return original if nothing found
 
 
-def apply_zoom(best_w, best_h, zoom):
+def composite_onto_tag(product_image: Image.Image,
+                        tag_image: Image.Image) -> Image.Image:
     """
-    Scale the best-fit dimensions by the zoom factor.
-    zoom=1.0 is Best Fit, >1.0 zooms in, <1.0 zooms out.
+    Fit product_image into the safe zone of tag_image (best-fit, centred).
+    The product_image passed in should already be cropped to the product only.
     """
-    return int(best_w * zoom), int(best_h * zoom)
+    canvas_w, canvas_h = tag_image.size
 
+    # Safe zone: exclude the right vertical strip and the bottom banner
+    banner_h    = int(canvas_h * 0.095)
+    vert_strip_w = int(canvas_w * 0.18)
+    safe_w = canvas_w - vert_strip_w
+    safe_h = canvas_h - banner_h
 
-def composite_image(product_image, tag_image, zoom):
-    """
-    Composite a product image onto a tag template using best-fit + zoom logic.
-    Returns the final RGB result image.
-    """
-    canvas_width, canvas_height = tag_image.size
+    # Best-fit scale inside safe zone
+    prod_w, prod_h = product_image.size
+    scale = min(safe_w / prod_w, safe_h / prod_h)
+    new_w = int(prod_w * scale)
+    new_h = int(prod_h * scale)
 
-    # Define safe zone (same as before)
-    banner_height = int(canvas_height * 0.095)
-    vert_tag_width = int(canvas_width * 0.18)
-    available_width = canvas_width - vert_tag_width
-    available_height = canvas_height - banner_height
+    product_resized = product_image.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
-    # Step 1: Calculate Best Fit size (fills safe zone perfectly at zoom=1.0)
-    best_w, best_h = best_fit_size(product_image, available_width, available_height)
+    # White canvas
+    result = Image.new("RGB", (canvas_w, canvas_h), (255, 255, 255))
 
-    # Step 2: Apply zoom on top of best fit
-    new_prod_width, new_prod_height = apply_zoom(best_w, best_h, zoom)
+    # Centre within safe zone
+    x = (safe_w - new_w) // 2
+    y = (safe_h - new_h) // 2
 
-    # Resize product
-    product_resized = product_image.resize((new_prod_width, new_prod_height), Image.Resampling.LANCZOS)
-
-    # Create result canvas
-    result_image = Image.new("RGB", (canvas_width, canvas_height), (255, 255, 255))
-
-    # Center product within the safe zone (may overflow at high zoom, which is intentional)
-    prod_x = (available_width - new_prod_width) // 2
-    prod_y = (available_height - new_prod_height) // 2
-
-    # Paste product first
-    if product_resized.mode == 'RGBA':
-        result_image.paste(product_resized, (prod_x, prod_y), product_resized)
+    if product_resized.mode == "RGBA":
+        result.paste(product_resized, (x, y), product_resized)
     else:
-        result_image.paste(product_resized, (prod_x, prod_y))
+        result.paste(product_resized, (x, y))
 
-    # Paste tag template on top
-    if tag_image.mode == 'RGBA':
-        result_image.paste(tag_image, (0, 0), tag_image)
+    # Overlay tag on top
+    if tag_image.mode == "RGBA":
+        result.paste(tag_image, (0, 0), tag_image)
     else:
-        result_image.paste(tag_image, (0, 0))
+        result.paste(tag_image, (0, 0))
 
-    return result_image
+    return result
 
 
+def image_to_bytes(img: Image.Image, fmt="JPEG", quality=95) -> bytes:
+    buf = BytesIO()
+    img.save(buf, format=fmt, quality=quality)
+    return buf.getvalue()
+
+
+# ── Jumia scraping helpers (unchanged) ────────────────────────────────────────
 @st.cache_resource
 def get_driver_path():
     try:
@@ -158,34 +160,23 @@ def get_driver_path():
 
 def get_chrome_options(headless=True):
     from selenium.webdriver.chrome.options import Options
-    chrome_options = Options()
+    opts = Options()
     if headless:
-        chrome_options.add_argument("--headless=new")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--disable-extensions")
-    chrome_options.add_argument("--window-size=1920,1080")
-    chrome_options.add_argument("--disable-notifications")
-    chrome_options.add_argument("--disable-logging")
-    chrome_options.add_argument("--log-level=3")
-    chrome_options.add_argument("--silent")
-    chrome_options.add_argument(
-        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    )
-    possible_paths = [
-        "/usr/bin/chromium",
-        "/usr/bin/chromium-browser",
-        "/usr/bin/google-chrome-stable",
-        "/usr/bin/google-chrome"
-    ]
-    for path in possible_paths:
+        opts.add_argument("--headless=new")
+    for arg in ["--no-sandbox", "--disable-dev-shm-usage",
+                 "--disable-blink-features=AutomationControlled",
+                 "--disable-gpu", "--disable-extensions",
+                 "--window-size=1920,1080", "--disable-notifications",
+                 "--disable-logging", "--log-level=3", "--silent"]:
+        opts.add_argument(arg)
+    opts.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    for path in ["/usr/bin/chromium", "/usr/bin/chromium-browser",
+                 "/usr/bin/google-chrome-stable", "/usr/bin/google-chrome"]:
         if os.path.exists(path):
-            chrome_options.binary_location = path
+            opts.binary_location = path
             break
-    return chrome_options
+    return opts
 
 
 def get_driver(headless=True):
@@ -193,24 +184,25 @@ def get_driver(headless=True):
         from selenium import webdriver
         from selenium.webdriver.chrome.service import Service
     except ImportError:
-        st.error("Selenium not installed. Install with: pip install selenium webdriver-manager")
+        st.error("Selenium not installed.")
         return None
-    chrome_options = get_chrome_options(headless)
+    opts = get_chrome_options(headless)
     driver = None
     try:
-        driver_path = get_driver_path()
-        if driver_path:
-            service = Service(driver_path)
-            service.log_path = os.devnull
-            driver = webdriver.Chrome(service=service, options=chrome_options)
+        dp = get_driver_path()
+        if dp:
+            svc = Service(dp)
+            svc.log_path = os.devnull
+            driver = webdriver.Chrome(service=svc, options=opts)
     except Exception:
         try:
-            driver = webdriver.Chrome(options=chrome_options)
+            driver = webdriver.Chrome(options=opts)
         except Exception:
             return None
     if driver:
         try:
-            driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            driver.execute_script(
+                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
             driver.set_page_load_timeout(20)
             driver.implicitly_wait(5)
         except Exception:
@@ -231,357 +223,348 @@ def search_jumia_by_sku(sku, base_url, search_url):
     try:
         driver = get_driver(headless=True)
         if not driver:
-            st.error("Could not initialize browser driver")
+            st.error("Could not initialise browser driver.")
             return None
         driver.get(search_url)
         try:
             WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "article.prd, h1"))
-            )
+                EC.presence_of_element_located((By.CSS_SELECTOR, "article.prd, h1")))
         except TimeoutException:
-            st.error("Page load timeout")
+            st.error("Page load timeout.")
             return None
-        if "There are no results for" in driver.page_source or "No results found" in driver.page_source:
+        if ("There are no results for" in driver.page_source
+                or "No results found" in driver.page_source):
             st.warning(f"No products found for SKU: {sku}")
             return None
-        try:
-            product_links = driver.find_elements(By.CSS_SELECTOR, "article.prd a.core")
-            if not product_links:
-                product_links = driver.find_elements(By.CSS_SELECTOR, "a[href*='.html']")
-            if product_links:
-                product_url = product_links[0].get_attribute("href")
-                driver.get(product_url)
-                WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.TAG_NAME, "h1"))
-                )
-                import time
-                time.sleep(1)
-                soup = BeautifulSoup(driver.page_source, 'html.parser')
-                image_url = None
-                og_image = soup.find('meta', property='og:image')
-                if og_image and og_image.get('content'):
-                    image_url = og_image['content']
-                if not image_url:
-                    for img in soup.find_all('img', limit=15):
-                        src = img.get('data-src') or img.get('src')
-                        if src and ('/product/' in src or '/unsafe/' in src or 'jumia.is' in src):
-                            if src.startswith('//'):
-                                src = 'https:' + src
-                            elif src.startswith('/'):
-                                src = base_url + src
-                            image_url = src
-                            break
-                if image_url:
-                    headers = {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                        'Referer': base_url,
-                    }
-                    img_response = requests.get(image_url, headers=headers, timeout=15)
-                    img_response.raise_for_status()
-                    return Image.open(BytesIO(img_response.content)).convert("RGBA")
-                else:
-                    st.warning("Found product but could not extract image")
-                    return None
-            else:
-                st.warning(f"No products found for SKU: {sku}")
-                return None
-        except Exception as e:
-            st.error(f"Error finding product: {str(e)}")
+        links = driver.find_elements(By.CSS_SELECTOR, "article.prd a.core")
+        if not links:
+            links = driver.find_elements(By.CSS_SELECTOR, "a[href*='.html']")
+        if not links:
+            st.warning(f"No products found for SKU: {sku}")
             return None
+        driver.get(links[0].get_attribute("href"))
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.TAG_NAME, "h1")))
+        import time; time.sleep(1)
+        soup = BeautifulSoup(driver.page_source, "html.parser")
+        image_url = None
+        og = soup.find("meta", property="og:image")
+        if og and og.get("content"):
+            image_url = og["content"]
+        if not image_url:
+            for img in soup.find_all("img", limit=15):
+                src = img.get("data-src") or img.get("src")
+                if src and ("/product/" in src or "/unsafe/" in src or "jumia.is" in src):
+                    if src.startswith("//"):
+                        src = "https:" + src
+                    elif src.startswith("/"):
+                        src = base_url + src
+                    image_url = src
+                    break
+        if not image_url:
+            st.warning("Found product but could not extract image.")
+            return None
+        r = requests.get(image_url,
+                         headers={"User-Agent": "Mozilla/5.0", "Referer": base_url},
+                         timeout=15)
+        r.raise_for_status()
+        return Image.open(BytesIO(r.content)).convert("RGBA")
     except Exception as e:
-        st.error(f"Error: {str(e)}")
+        st.error(f"Error: {e}")
         return None
     finally:
         if driver:
-            try:
-                driver.quit()
-            except Exception:
-                pass
+            try: driver.quit()
+            except Exception: pass
 
 
-# ── SINGLE IMAGE MODE ──────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+#  SINGLE IMAGE MODE
+# ══════════════════════════════════════════════════════════════════════════════
 if processing_mode == "Single Image":
-    col1, col2 = st.columns(2)
+
+    if not CROPPER_AVAILABLE:
+        st.warning(
+            "📦 **streamlit-cropper** is not installed. "
+            "Run `pip install streamlit-cropper` then restart the app "
+            "to enable interactive cropping. "
+            "Auto-crop (whitespace trimming) is being used as fallback."
+        )
+
+    col1, col2 = st.columns([1, 1])
 
     with col1:
-        st.subheader("Upload Product Image")
+        st.subheader("1 · Load Image")
         upload_method = st.radio(
-            "Choose upload method:",
-            ["Upload from device", "Load from Image URL", "Load from SKU"]
+            "Source:",
+            ["Upload from device", "Load from Image URL", "Load from SKU"],
+            horizontal=True,
         )
 
-        product_image = None
+        raw_image = None   # original PIL image, before any crop
 
         if upload_method == "Upload from device":
-            uploaded_file = st.file_uploader(
-                "Choose an image file",
-                type=["png", "jpg", "jpeg", "webp"]
-            )
-            if uploaded_file is not None:
-                product_image = Image.open(uploaded_file).convert("RGBA")
+            f = st.file_uploader("Choose an image file",
+                                  type=["png", "jpg", "jpeg", "webp"])
+            if f:
+                raw_image = Image.open(f).convert("RGBA")
 
         elif upload_method == "Load from Image URL":
-            image_url = st.text_input("Enter image URL:")
-            if image_url:
+            url = st.text_input("Image URL:")
+            if url:
                 try:
-                    response = requests.get(image_url)
-                    product_image = Image.open(BytesIO(response.content)).convert("RGBA")
-                    st.success("Image loaded successfully!")
+                    raw_image = Image.open(
+                        BytesIO(requests.get(url).content)).convert("RGBA")
+                    st.success("Loaded!")
                 except Exception as e:
-                    st.error(f"Error loading image: {str(e)}")
+                    st.error(f"Could not load image: {e}")
 
-        else:  # Load from SKU
-            sku_input = st.text_input("Enter Product SKU:", placeholder="e.g., GE840EA6C62GANAFAMZ")
-            jumia_site = st.radio("Select Jumia Site:", ["Jumia Kenya", "Jumia Uganda"], horizontal=True)
+        else:  # SKU
+            sku_input = st.text_input("Product SKU:",
+                                       placeholder="e.g. GE840EA6C62GANAFAMZ")
+            site = st.radio("Jumia site:", ["Jumia Kenya", "Jumia Uganda"],
+                             horizontal=True)
             if sku_input:
-                if jumia_site == "Jumia Kenya":
-                    base_url = "https://www.jumia.co.ke"
-                    search_url = f"https://www.jumia.co.ke/catalog/?q={sku_input}"
-                else:
-                    base_url = "https://www.jumia.ug"
-                    search_url = f"https://www.jumia.ug/catalog/?q={sku_input}"
-                if st.button("Search and Extract Image", use_container_width=True):
-                    with st.spinner(f"Searching {jumia_site} for SKU..."):
-                        product_image = search_jumia_by_sku(sku_input, base_url, search_url)
-                        if product_image:
-                            st.success("Image found and loaded successfully!")
+                base = "https://www.jumia.co.ke" if site == "Jumia Kenya" \
+                       else "https://www.jumia.ug"
+                search = f"{base}/catalog/?q={sku_input}"
+                if st.button("Search & Extract Image", use_container_width=True):
+                    with st.spinner("Searching…"):
+                        raw_image = search_jumia_by_sku(sku_input, base, search)
+                        if raw_image:
+                            st.success("Image found!")
                         else:
-                            st.error("Could not find product with this SKU")
+                            st.error("Could not find product.")
+
+        # ── Cropping step ──────────────────────────────────────────────────────
+        cropped_image = None
+
+        if raw_image is not None:
+            st.markdown("---")
+            st.subheader("2 · Crop to Product")
+
+            if CROPPER_AVAILABLE:
+                st.markdown(
+                    "Drag the handles to frame the product tightly. "
+                    "Remove any excess whitespace for the best result."
+                )
+                # st_cropper returns the cropped PIL image live
+                cropped_image = st_cropper(
+                    raw_image.convert("RGB"),   # cropper needs RGB
+                    realtime_update=True,
+                    box_color="#FF4B4B",
+                    aspect_ratio=None,          # free-form crop
+                )
+                st.caption("✂️ Adjust the red box, then check the preview →")
+
+            else:
+                # Fallback: auto-trim whitespace
+                st.info("🤖 Auto-cropping whitespace…")
+                cropped_image = auto_crop_whitespace(raw_image)
+                st.image(cropped_image.convert("RGB"),
+                         caption="Auto-cropped preview", use_container_width=True)
 
     with col2:
-        st.subheader("Preview")
+        st.subheader("3 · Preview & Download")
 
-        if product_image is not None:
-            try:
-                tag_filename = tag_files[tag_type]
-                tag_path = get_tag_path(tag_filename)
+        if cropped_image is not None:
+            tag_filename = tag_files[tag_type]
+            tag_path = get_tag_path(tag_filename)
 
-                if not os.path.exists(tag_path):
-                    st.error(f"Tag file not found: {tag_filename}")
-                    st.info("""
-                    **Please make sure the tag PNG files are in the same directory as this app.**
+            if not os.path.exists(tag_path):
+                st.error(f"Tag file not found: **{tag_filename}**")
+                st.info("Make sure the tag PNG files are in the same folder as this app.")
+                st.stop()
 
-                    Required files:
-                    - RefurbishedStickerUpdated-Renewd.png
-                    - RefurbishedStickerUpdate-No-Grading.png
-                    - Refurbished-StickerUpdated-Grade-A.png
-                    - Refurbished-StickerUpdated-Grade-B.png
-                    - Refurbished-StickerUpdated-Grade-C.png
-                    """)
-                    st.stop()
+            tag_image = Image.open(tag_path).convert("RGBA")
 
-                tag_image = Image.open(tag_path).convert("RGBA")
+            # Convert cropped to RGBA for compositing
+            if cropped_image.mode != "RGBA":
+                cropped_image = cropped_image.convert("RGBA")
 
-                # Use the new best-fit + zoom composite function
-                result_image = composite_image(product_image, tag_image, zoom_level)
+            result = composite_onto_tag(cropped_image, tag_image)
 
-                st.image(result_image, use_container_width=True)
+            st.image(result, use_container_width=True,
+                     caption=f"Tagged · {tag_type}")
 
-                st.markdown("---")
-                buf = BytesIO()
-                result_image.save(buf, format="JPEG", quality=95)
-                buf.seek(0)
-
-                st.download_button(
-                    label="Download Tagged Image (JPEG)",
-                    data=buf,
-                    file_name=f"refurbished_product_{tag_type.lower().replace(' ', '_')}.jpg",
-                    mime="image/jpeg",
-                    use_container_width=True
-                )
-
-            except Exception as e:
-                st.error(f"Error processing image: {str(e)}")
+            st.markdown("---")
+            buf = BytesIO()
+            result.save(buf, format="JPEG", quality=95)
+            buf.seek(0)
+            st.download_button(
+                label="⬇️ Download Tagged Image (JPEG)",
+                data=buf,
+                file_name=f"refurbished_{tag_type.lower().replace(' ','_')}.jpg",
+                mime="image/jpeg",
+                use_container_width=True,
+            )
         else:
-            st.info("Upload or provide a URL for a product image to get started!")
+            st.info("← Load an image and crop it to see the preview here.")
 
 
-# ── BULK PROCESSING MODE ───────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+#  BULK PROCESSING MODE
+# ══════════════════════════════════════════════════════════════════════════════
 else:
     st.subheader("Bulk Processing")
-    st.markdown("Process multiple products at once")
-
-    bulk_method = st.radio(
-        "Choose bulk input method:",
-        ["Upload multiple images", "Enter URLs manually", "Upload Excel file with URLs", "Enter SKUs"]
+    st.markdown(
+        "Images are **auto-cropped** (whitespace trimming) then composited. "
+        "For pixel-perfect results on individual images, use Single Image mode."
     )
 
-    products_to_process = []
+    bulk_method = st.radio(
+        "Input method:",
+        ["Upload multiple images", "Enter URLs manually",
+         "Upload Excel file with URLs", "Enter SKUs"],
+    )
 
+    products_to_process = []  # list of (PIL Image, filename_str)
+
+    # ── Input collection ───────────────────────────────────────────────────────
     if bulk_method == "Upload multiple images":
-        uploaded_files = st.file_uploader(
-            "Choose multiple image files",
-            type=["png", "jpg", "jpeg", "webp"],
-            accept_multiple_files=True
-        )
-        if uploaded_files:
-            st.info(f"{len(uploaded_files)} files uploaded")
-            for uploaded_file in uploaded_files:
+        files = st.file_uploader("Choose image files",
+                                  type=["png", "jpg", "jpeg", "webp"],
+                                  accept_multiple_files=True)
+        if files:
+            st.info(f"{len(files)} files uploaded")
+            for f in files:
                 try:
-                    img = Image.open(uploaded_file).convert("RGBA")
-                    filename = uploaded_file.name.rsplit('.', 1)[0]
-                    products_to_process.append((img, filename))
+                    img = Image.open(f).convert("RGBA")
+                    products_to_process.append((img, f.name.rsplit(".", 1)[0]))
                 except Exception as e:
-                    st.warning(f"Could not load {uploaded_file.name}: {str(e)}")
+                    st.warning(f"Could not load {f.name}: {e}")
 
     elif bulk_method == "Enter URLs manually":
-        urls_input = st.text_area(
-            "Enter image URLs (one per line):",
-            height=200,
-            placeholder="https://example.com/image1.jpg\nhttps://example.com/image2.jpg"
-        )
-        if urls_input.strip():
-            urls = [url.strip() for url in urls_input.split('\n') if url.strip()]
-            st.info(f"{len(urls)} URLs entered")
-            for idx, url in enumerate(urls):
+        raw = st.text_area("Image URLs (one per line):", height=180,
+                            placeholder="https://example.com/image1.jpg")
+        if raw.strip():
+            for i, url in enumerate([u.strip() for u in raw.splitlines() if u.strip()]):
                 try:
-                    response = requests.get(url, timeout=10)
-                    response.raise_for_status()
-                    img = Image.open(BytesIO(response.content)).convert("RGBA")
-                    products_to_process.append((img, f"image_{idx+1}"))
+                    r = requests.get(url, timeout=10); r.raise_for_status()
+                    img = Image.open(BytesIO(r.content)).convert("RGBA")
+                    products_to_process.append((img, f"image_{i+1}"))
                 except Exception as e:
-                    st.warning(f"Could not load {url}: {str(e)}")
+                    st.warning(f"Could not load URL {i+1}: {e}")
 
     elif bulk_method == "Upload Excel file with URLs":
-        st.markdown("""
-        **Excel file format:**
-        - Column A: Image URLs (required)
-        - Column B: Product names/IDs (optional)
-        """)
-        excel_file = st.file_uploader("Upload Excel file (.xlsx or .xls)", type=["xlsx", "xls"])
-        if excel_file:
+        st.markdown("**Column A:** Image URLs · **Column B (optional):** Product name")
+        xf = st.file_uploader("Excel file", type=["xlsx", "xls"])
+        if xf:
             try:
                 import pandas as pd
-                df = pd.read_excel(excel_file)
-                if len(df.columns) > 0:
-                    urls = df.iloc[:, 0].dropna().astype(str).tolist()
-                    names = df.iloc[:, 1].dropna().astype(str).tolist() if len(df.columns) > 1 else [f"product_{i+1}" for i in range(len(urls))]
-                    st.info(f"Found {len(urls)} URLs in Excel file")
-                    for idx, (url, name) in enumerate(zip(urls, names)):
-                        try:
-                            response = requests.get(url, timeout=10)
-                            response.raise_for_status()
-                            img = Image.open(BytesIO(response.content)).convert("RGBA")
-                            clean_name = re.sub(r'[^\w\s-]', '', name).strip().replace(' ', '_')
-                            products_to_process.append((img, clean_name or f"product_{idx+1}"))
-                        except Exception as e:
-                            st.warning(f"Could not load {name}: {str(e)}")
-                else:
-                    st.error("Excel file appears to be empty")
+                df = pd.read_excel(xf)
+                urls  = df.iloc[:, 0].dropna().astype(str).tolist()
+                names = (df.iloc[:, 1].dropna().astype(str).tolist()
+                         if len(df.columns) > 1
+                         else [f"product_{i+1}" for i in range(len(urls))])
+                st.info(f"Found {len(urls)} URLs")
+                for i, (url, name) in enumerate(zip(urls, names)):
+                    try:
+                        r = requests.get(url, timeout=10); r.raise_for_status()
+                        img = Image.open(BytesIO(r.content)).convert("RGBA")
+                        clean = re.sub(r"[^\w\s-]", "", name).strip().replace(" ", "_")
+                        products_to_process.append((img, clean or f"product_{i+1}"))
+                    except Exception as e:
+                        st.warning(f"Could not load {name}: {e}")
             except Exception as e:
-                st.error(f"Error reading Excel file: {str(e)}")
+                st.error(f"Excel error: {e}")
 
-    else:  # Enter SKUs
-        skus_input = st.text_area(
-            "Enter Product SKUs (one per line):",
-            height=200,
-            placeholder="GE840EA6C62GANAFAMZ\nAP456EA7D89HANAFAMZ"
-        )
-        jumia_site_bulk = st.radio("Select Jumia Site:", ["Jumia Kenya", "Jumia Uganda"], horizontal=True, key="bulk_jumia_site")
-        if skus_input.strip():
-            skus = [sku.strip() for sku in skus_input.split('\n') if sku.strip()]
+    else:  # SKUs
+        skus_raw = st.text_area("SKUs (one per line):", height=180,
+                                 placeholder="GE840EA6C62GANAFAMZ")
+        site_bulk = st.radio("Jumia site:", ["Jumia Kenya", "Jumia Uganda"],
+                              horizontal=True, key="bulk_site")
+        if skus_raw.strip():
+            skus = [s.strip() for s in skus_raw.splitlines() if s.strip()]
             st.info(f"{len(skus)} SKUs entered")
-            if st.button("Search All SKUs and Extract Images", use_container_width=True):
-                base_url = "https://www.jumia.co.ke" if jumia_site_bulk == "Jumia Kenya" else "https://www.jumia.ug"
-                progress = st.progress(0)
-                status_text = st.empty()
-                for idx, sku in enumerate(skus):
-                    status_text.text(f"Processing SKU {idx+1}/{len(skus)}: {sku}")
-                    search_url = f"{base_url}/catalog/?q={sku}"
-                    img = search_jumia_by_sku(sku, base_url, search_url)
+            if st.button("Search All SKUs", use_container_width=True):
+                base = ("https://www.jumia.co.ke" if site_bulk == "Jumia Kenya"
+                        else "https://www.jumia.ug")
+                prog = st.progress(0)
+                status = st.empty()
+                for i, sku in enumerate(skus):
+                    status.text(f"Processing {i+1}/{len(skus)}: {sku}")
+                    img = search_jumia_by_sku(sku, base, f"{base}/catalog/?q={sku}")
                     if img:
                         products_to_process.append((img, sku))
                     else:
-                        st.warning(f"Could not find image for SKU: {sku}")
-                    progress.progress((idx + 1) / len(skus))
-                status_text.text(f"Completed! Found {len(products_to_process)} images out of {len(skus)} SKUs")
+                        st.warning(f"No image for SKU: {sku}")
+                    prog.progress((i + 1) / len(skus))
+                status.text(f"Done — {len(products_to_process)}/{len(skus)} found")
 
-    # ── Bulk: Review & Process ─────────────────────────────────────────────────
+    # ── Preview grid ───────────────────────────────────────────────────────────
     if products_to_process:
         st.markdown("---")
-        st.subheader("Review Images")
-        st.info(f"Loaded {len(products_to_process)} images. Use the **🔍 Zoom** slider in the sidebar to adjust sizing for all images.")
+        st.subheader(f"Loaded {len(products_to_process)} images")
+        st.caption("Auto-crop will trim whitespace before compositing.")
 
-        # Preview grid (zoom is global from sidebar — no per-image sliders needed)
-        cols_per_row = 3
-        rows = (len(products_to_process) + cols_per_row - 1) // cols_per_row
-        for row in range(rows):
+        cols_per_row = 4
+        for row_start in range(0, len(products_to_process), cols_per_row):
             cols = st.columns(cols_per_row)
-            for col_idx in range(cols_per_row):
-                idx = row * cols_per_row + col_idx
-                if idx < len(products_to_process):
-                    img, filename = products_to_process[idx]
-                    with cols[col_idx]:
-                        st.image(img, caption=filename, use_container_width=True)
+            for col_idx, (img, name) in enumerate(
+                    products_to_process[row_start: row_start + cols_per_row]):
+                with cols[col_idx]:
+                    st.image(img.convert("RGB"), caption=name,
+                             use_container_width=True)
 
         st.markdown("---")
 
-        if st.button("Process All Images", use_container_width=True):
-            st.info(f"Processing {len(products_to_process)} images...")
-            progress_bar = st.progress(0)
-            processed_images = []
+        if st.button("⚙️ Process All Images", use_container_width=True):
+            tag_path = get_tag_path(tag_files[tag_type])
+            if not os.path.exists(tag_path):
+                st.error(f"Tag file not found: {tag_files[tag_type]}")
+                st.stop()
 
-            try:
-                tag_filename = tag_files[tag_type]
-                tag_path = get_tag_path(tag_filename)
-                if not os.path.exists(tag_path):
-                    st.error(f"Tag file not found: {tag_filename}")
-                    st.stop()
+            tag_image = Image.open(tag_path).convert("RGBA")
+            prog = st.progress(0)
+            processed = []
 
-                tag_image = Image.open(tag_path).convert("RGBA")
+            for i, (raw_img, name) in enumerate(products_to_process):
+                try:
+                    cropped = auto_crop_whitespace(raw_img)
+                    result  = composite_onto_tag(cropped, tag_image)
+                    processed.append((result, name))
+                except Exception as e:
+                    st.warning(f"Error on {name}: {e}")
+                prog.progress((i + 1) / len(products_to_process))
 
-                for idx, (product_image, filename) in enumerate(products_to_process):
-                    try:
-                        # Best-fit + zoom applied uniformly via sidebar zoom_level
-                        result_image = composite_image(product_image, tag_image, zoom_level)
-                        processed_images.append((result_image, filename))
-                    except Exception as e:
-                        st.warning(f"Error processing {filename}: {str(e)}")
-                    progress_bar.progress((idx + 1) / len(products_to_process))
+            if processed:
+                st.success(f"✅ {len(processed)} images processed!")
 
-                if processed_images:
-                    st.markdown("---")
-                    st.success(f"Successfully processed {len(processed_images)} images!")
+                # ZIP download
+                zip_buf = BytesIO()
+                with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                    for img, name in processed:
+                        zf.writestr(f"{name}_1.jpg", image_to_bytes(img))
+                zip_buf.seek(0)
 
-                    import zipfile
-                    zip_buffer = BytesIO()
-                    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-                        for img, name in processed_images:
-                            img_buffer = BytesIO()
-                            img.save(img_buffer, format='JPEG', quality=95)
-                            zip_file.writestr(f"{name}_1.jpg", img_buffer.getvalue())
-                    zip_buffer.seek(0)
+                st.download_button(
+                    label=f"⬇️ Download All {len(processed)} Images (ZIP)",
+                    data=zip_buf,
+                    file_name=f"refurbished_{tag_type.lower().replace(' ','_')}.zip",
+                    mime="application/zip",
+                    use_container_width=True,
+                )
 
-                    st.download_button(
-                        label=f"Download All {len(processed_images)} Images (ZIP)",
-                        data=zip_buffer,
-                        file_name=f"refurbished_products_{tag_type.lower().replace(' ', '_')}.zip",
-                        mime="application/zip",
-                        use_container_width=True
-                    )
-
-                    st.markdown("### Preview")
-                    cols = st.columns(3)
-                    for idx, (img, name) in enumerate(processed_images[:9]):
-                        with cols[idx % 3]:
-                            st.image(img, caption=name, use_container_width=True)
-                    if len(processed_images) > 9:
-                        st.info(f"Showing 9 of {len(processed_images)} processed images")
-                else:
-                    st.error("No images were successfully processed")
-
-            except Exception as e:
-                st.error(f"Error during processing: {str(e)}")
+                # Preview first 8
+                st.markdown("### Preview")
+                prev_cols = st.columns(4)
+                for i, (img, name) in enumerate(processed[:8]):
+                    with prev_cols[i % 4]:
+                        st.image(img, caption=name, use_container_width=True)
+                if len(processed) > 8:
+                    st.caption(f"Showing 8 of {len(processed)}")
+            else:
+                st.error("No images were successfully processed.")
     else:
-        st.info("Please provide images to process")
+        st.info("Provide images above to get started.")
 
-# Footer
+# ── Footer ─────────────────────────────────────────────────────────────────────
 st.markdown("---")
 st.markdown(
-    """
-    <div style='text-align: center; color: #666;'>
-    <p>💡 Tip: At Zoom 1.0x, the product automatically fills the safe zone perfectly. Drag right to zoom in.</p>
-    </div>
-    """,
-    unsafe_allow_html=True
+    "<div style='text-align:center;color:#888'>"
+    "Single Image: drag the crop box for perfect framing · "
+    "Bulk: auto-crop trims whitespace automatically"
+    "</div>",
+    unsafe_allow_html=True,
 )
