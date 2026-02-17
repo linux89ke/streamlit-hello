@@ -124,24 +124,41 @@ def process_single(product_image: Image.Image,
     return fit_with_margin(cropped, tag_image)
 
 
-def extract_product_from_tagged(tagged_image: Image.Image) -> Image.Image:
+def strip_and_retag(tagged_image: Image.Image,
+                    new_tag_image: Image.Image) -> Image.Image:
     """
-    Reverse engineer a tagged image back to just the product.
+    Convert a tagged image to a new tag grade.
 
-    Since the tag overlay covers the right strip and bottom banner,
-    we crop exactly the safe zone — the area that was never covered.
-    This gives us the product on its white background, ready to
-    re-composite onto any new tag.
+    Strategy:
+    1. Crop the safe zone (untouched product area — excludes the right
+       strip and bottom banner where the old tag lived)
+    2. Place it back on a clean full-size white canvas so the product
+       sits at its original position — old tag pixels are gone
+    3. Overlay the new tag on top
+
+    Works well for Jumia images because products are centred on white,
+    so the tag strips almost always cover background, not product pixels.
     """
     w, h = tagged_image.size
 
-    # These match the exact ratios used when the tag was applied
+    # Pixel boundaries of the safe zone (never touched by the old tag)
     safe_w = w - int(w * VERT_STRIP_RATIO)
     safe_h = h - int(h * BANNER_RATIO)
 
-    # Crop just the safe zone (top-left corner to safe_w x safe_h)
-    product_zone = tagged_image.crop((0, 0, safe_w, safe_h))
-    return product_zone
+    # Step 1: Clean white canvas at the original full size
+    clean_canvas = Image.new("RGB", (w, h), (255, 255, 255))
+
+    # Step 2: Paste only the safe zone — right strip + bottom banner stay white
+    safe_zone = tagged_image.crop((0, 0, safe_w, safe_h))
+    clean_canvas.paste(safe_zone, (0, 0))
+
+    # Step 3: Overlay new tag on top
+    if new_tag_image.mode == "RGBA":
+        clean_canvas.paste(new_tag_image, (0, 0), new_tag_image)
+    else:
+        clean_canvas.paste(new_tag_image, (0, 0))
+
+    return clean_canvas
 
 
 def image_to_bytes(img: Image.Image, quality=95) -> bytes:
@@ -552,34 +569,29 @@ with tab3:
                                       cf.name.rsplit(".", 1)[0])]
 
         with col2:
-            st.markdown("#### Preview")
+            st.markdown("#### Result")
             if images_to_convert:
                 tagged_img, fname = images_to_convert[0]
-
-                # Show original
-                st.image(tagged_img, caption="Original (with old tag)",
-                         use_container_width=True)
 
                 tag_path = get_tag_path(tag_files[tag_type])
                 if not os.path.exists(tag_path):
                     st.error(f"Tag file not found: **{tag_files[tag_type]}**")
                     st.stop()
 
-                new_tag   = Image.open(tag_path).convert("RGBA")
+                new_tag = Image.open(tag_path).convert("RGBA")
 
-                # Step 1: extract product zone from tagged image
-                product_zone = extract_product_from_tagged(tagged_img)
+                # Strip old tag pixels, restore white canvas, apply new tag
+                result = strip_and_retag(tagged_img, new_tag)
 
-                # Step 2: auto-crop any leftover whitespace in the product zone
-                product_zone = auto_crop_whitespace(product_zone.convert("RGBA"))
-
-                # Step 3: re-composite onto new tag
-                result = fit_with_margin(product_zone, new_tag)
+                before_col, after_col = st.columns(2)
+                with before_col:
+                    st.image(tagged_img, caption="Before (old tag)",
+                             use_container_width=True)
+                with after_col:
+                    st.image(result, caption=f"After → {tag_type}",
+                             use_container_width=True)
 
                 st.markdown("---")
-                st.image(result, caption=f"Converted → {tag_type}",
-                         use_container_width=True)
-
                 st.download_button(
                     label=f"⬇️ Download as {tag_type} (JPEG)",
                     data=image_to_bytes(result),
@@ -633,9 +645,7 @@ with tab3:
 
                 for i, (tagged_img, name) in enumerate(images_to_convert):
                     try:
-                        product_zone = extract_product_from_tagged(tagged_img)
-                        product_zone = auto_crop_whitespace(product_zone.convert("RGBA"))
-                        result       = fit_with_margin(product_zone, new_tag)
+                        result = strip_and_retag(tagged_img, new_tag)
                         converted.append((result, name))
                     except Exception as e:
                         st.warning(f"Error on {name}: {e}")
