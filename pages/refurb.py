@@ -20,13 +20,13 @@ from io import BytesIO
 import numpy as np
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Refurbished Product Analyzer", page_icon="🔄", layout="wide")
-st.title("🔄 Refurbished Product Data Extractor & Analyzer")
+st.set_page_config(page_title="Refurbished Product Analyzer", layout="wide")
+st.title(":material/sync: Refurbished Product Data Extractor & Analyzer")
 st.markdown("*Specialized scraper for refurbished/renewed product verification*")
 
 # --- SIDEBAR ---
 with st.sidebar:
-    st.header("⚙️ Settings")
+    st.header(":material/settings: Settings")
     region_choice = st.selectbox("Select Region:", ("Region 1 (KE)", "Region 2 (UG)"))
     domain = "jumia.co.ke" if "KE" in region_choice else "jumia.ug"
     st.markdown("---")
@@ -35,7 +35,7 @@ with st.sidebar:
     timeout_seconds = st.slider("Page Timeout (seconds):", 10, 30, 20)
     check_images = st.checkbox("Analyze Product Images for Red Badges", value=True, 
                                help="Downloads and analyzes images to detect refurbished tags")
-    st.info(f"⚡ Using {max_workers} workers with {timeout_seconds}s timeout")
+    st.info(f"Using {max_workers} workers with {timeout_seconds}s timeout", icon=":material/bolt:")
 
 # --- 1. DRIVER SETUP ---
 @st.cache_resource
@@ -47,7 +47,7 @@ def get_driver_path():
         try:
             return ChromeDriverManager().install()
         except Exception as e:
-            st.error(f"Could not install driver: {e}")
+            st.error(f"Could not install driver: {e}", icon=":material/error:")
             return None
 
 def get_chrome_options(headless=True):
@@ -408,9 +408,9 @@ def extract_category_links(category_url, headless=True, timeout=20):
                 extracted_urls.add(href)
                 
     except TimeoutException:
-        st.error(f"Timeout while trying to load the category URL: {category_url}")
+        st.error(f"Timeout while trying to load the category URL: {category_url}", icon=":material/timer:")
     except Exception as e:
-        st.error(f"Error extracting links from category: {e}")
+        st.error(f"Error extracting links from category: {e}", icon=":material/error:")
     finally:
         if driver:
             try:
@@ -440,7 +440,7 @@ def process_inputs(text_input, file_input, default_domain):
                 if str(cell).strip() and str(cell).lower() != 'nan'
             )
         except Exception as e:
-            st.error(f"Error reading file: {e}")
+            st.error(f"Error reading file: {e}", icon=":material/error:")
 
     final_targets = []
     for item in raw_items:
@@ -604,11 +604,8 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
         if rating_match:
             data['Product Rating'] = rating_match.group(1) + '/5'
     
-    # 12. Check for Description Images/Infographics (UPDATED FOR WEBP & MARKUP CLASS)
-    # Search for the Jumia 'markup' class or standard 'product-desc'
+    # 12. Check for Description Images/Infographics
     desc_section = soup.find('div', class_=re.compile(r'markup|product-desc|detail'))
-    
-    # Fallback: Look for the 'Product details' header container if class search fails
     if not desc_section:
         header = soup.find(['h2', 'div'], string=re.compile(r'Product details|Description', re.I))
         if header:
@@ -621,7 +618,6 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
         count = 0
         for img in desc_images:
             src = img.get('data-src') or img.get('src', '')
-            # Check for valid extensions (including WEBP) and avoid tiny icons
             if src and len(src) > 10 and ('.jpg' in src or '.png' in src or '.jpeg' in src or '.webp' in src):
                 count += 1
         
@@ -767,7 +763,7 @@ if 'scraped_results' not in st.session_state:
 if 'failed_items' not in st.session_state:
     st.session_state['failed_items'] = []
 
-st.markdown("### 📥 Input Data")
+st.markdown("### :material/input: Input Data")
 col_txt, col_upl = st.columns(2)
 with col_txt:
     text_in = st.text_area("Paste SKUs/Links:", height=100, 
@@ -775,18 +771,18 @@ with col_txt:
 with col_upl:
     file_in = st.file_uploader("Upload Excel/CSV with SKUs:", type=['xlsx', 'csv'])
 
-category_url_in = st.text_input("🌐 Or paste a Category/Search URL (Extracts all products on the page):", 
+category_url_in = st.text_input(":material/language: Or paste a Category/Search URL (Extracts all products on the page):", 
                                 placeholder="https://www.jumia.co.ke/smartphones/")
 
 st.markdown("---")
 
-if st.button("🚀 Start Refurbished Product Analysis", type="primary"):
+if st.button("Start Refurbished Product Analysis", type="primary", icon=":material/play_arrow:"):
     # 1. Process standard SKUs / Links
     targets = process_inputs(text_in, file_in, domain)
     
     # 2. Extract from Category URL if provided
     if category_url_in:
-        with st.spinner("🌐 Extracting product links from category page..."):
+        with st.spinner("Extracting product links from category page..."):
             cat_links = extract_category_links(
                 category_url_in, 
                 headless=not show_browser, 
@@ -796,12 +792,12 @@ if st.button("🚀 Start Refurbished Product Analysis", type="primary"):
                 targets.append({"type": "url", "value": link, "original_sku": link})
             
             if cat_links:
-                st.success(f"✅ Extracted {len(cat_links)} products from the category URL.")
+                st.success(f"Extracted {len(cat_links)} products from the category URL.", icon=":material/check_circle:")
             else:
-                st.warning("⚠️ Could not find any product links on the provided category URL.")
+                st.warning("Could not find any product links on the provided category URL.", icon=":material/warning:")
     
     if not targets:
-        st.warning("⚠️ No valid data found. Please enter SKUs, URLs, or a Category URL.")
+        st.warning("No valid data found. Please enter SKUs, URLs, or a Category URL.", icon=":material/warning:")
     else:
         st.session_state['scraped_results'] = []
         st.session_state['failed_items'] = []
@@ -812,7 +808,7 @@ if st.button("🚀 Start Refurbished Product Analysis", type="primary"):
         progress_details = st.empty()
         current_item_display = st.empty()
         
-        status_text.text(f"🔄 Analyzing {len(targets)} products for refurbished attributes...")
+        status_text.text(f"Analyzing {len(targets)} products for refurbished attributes...")
         start_time = time.time()
         
         batch_size = max_workers * 2
@@ -828,8 +824,8 @@ if st.button("🚀 Start Refurbished Product Analysis", type="primary"):
             batch_num = (i // batch_size) + 1
             total_batches = (len(targets) + batch_size - 1) // batch_size
             progress_details.info(
-                f"📦 Processing batch {batch_num}/{total_batches} "
-                f"({len(batch)} items)"
+                f"Processing batch {batch_num}/{total_batches} "
+                f"({len(batch)} items)", icon=":material/inventory_2:"
             )
             
             batch_results, batch_failed = scrape_items_parallel(
@@ -850,9 +846,9 @@ if st.button("🚀 Start Refurbished Product Analysis", type="primary"):
             remaining = (len(targets) - processed_count) * avg_time
             
             status_text.text(
-                f"🔄 Processed {processed_count}/{len(targets)} items "
-                f"({processed_count/elapsed:.1f} items/sec) • "
-                f"⏱️ Est. remaining: {remaining:.0f}s"
+                f"Processed {processed_count}/{len(targets)} items "
+                f"({processed_count/elapsed:.1f} items/sec) | "
+                f"Est. remaining: {remaining:.0f}s"
             )
             
             # Show last processed item with image if available
@@ -865,13 +861,13 @@ if st.button("🚀 Start Refurbished Product Analysis", type="primary"):
                             try:
                                 st.image(last_item['Primary Image URL'], width=150)
                             except:
-                                st.write("🖼️ Image")
+                                st.caption("Image unavailable")
                     with col2:
                         st.caption(f"**Last processed:** {last_item.get('Product Name', 'N/A')[:60]}...")
                         # Updated status check for YES/NO
                         refurb_text = last_item.get('Is Refurbished', 'NO')
-                        refurb_icon = "✅" if refurb_text == 'YES' else "❌"
-                        warranty_icon = "✅" if last_item.get('Has Warranty') == 'YES' else "❌"
+                        refurb_icon = "Yes" if refurb_text == 'YES' else "No"
+                        warranty_icon = "Yes" if last_item.get('Has Warranty') == 'YES' else "No"
                         st.caption(f"Refurbished: {refurb_icon} | Warranty: {warranty_icon} | Brand: {last_item.get('Brand', 'N/A')}")
         
         elapsed = time.time() - start_time
@@ -887,13 +883,13 @@ if st.button("🚀 Start Refurbished Product Analysis", type="primary"):
         
         if failed_count > 0:
             status_text.warning(
-                f"⚠️ Completed with issues: {success_count} successful, {failed_count} failed "
-                f"({elapsed:.1f}s • {len(targets)/elapsed:.1f} items/sec)"
+                f"Completed with issues: {success_count} successful, {failed_count} failed "
+                f"({elapsed:.1f}s | {len(targets)/elapsed:.1f} items/sec)", icon=":material/warning:"
             )
         else:
             status_text.success(
-                f"✅ Done! Analyzed {len(targets)} products in {elapsed:.1f}s "
-                f"({len(targets)/elapsed:.1f} items/sec)"
+                f"Done! Analyzed {len(targets)} products in {elapsed:.1f}s "
+                f"({len(targets)/elapsed:.1f} items/sec)", icon=":material/check_circle:"
             )
         
         time.sleep(2)
@@ -905,7 +901,7 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
     
     # Show failed items if any
     if st.session_state['failed_items']:
-        with st.expander(f"⚠️ Failed Items ({len(st.session_state['failed_items'])})", expanded=False):
+        with st.expander(f"Failed Items ({len(st.session_state['failed_items'])})", expanded=False):
             failed_df = pd.DataFrame(st.session_state['failed_items'])
             st.dataframe(failed_df, use_container_width=True)
     
@@ -928,29 +924,29 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
         df = df[cols]
         
         # Key Metrics
-        st.subheader("📊 Analysis Summary")
+        st.subheader(":material/bar_chart: Analysis Summary")
         col1, col2, col3, col4, col5 = st.columns(5)
         
         with col1:
-            st.metric("✅ Products Analyzed", len(df))
+            st.metric("Total Analyzed", len(df))
         with col2:
             refurb_count = (df['Is Refurbished'] == 'YES').sum()
-            st.metric("🔄 Refurbished Items", refurb_count)
+            st.metric("Refurbished Items", refurb_count)
         with col3:
             warranty_count = (df['Has Warranty'] == 'YES').sum()
-            st.metric("🛡️ With Warranty", warranty_count)
+            st.metric("With Warranty", warranty_count)
         with col4:
             if 'grading tag' in df.columns:
                 badge_count = df['grading tag'].str.contains('YES', na=False).sum()
-                st.metric("🏷️ Grading Tags", badge_count)
+                st.metric("Grading Tags", badge_count)
         with col5:
              if 'Has info-graphics' in df.columns:
                 desc_img_count = (df['Has info-graphics'] == 'YES').sum()
-                st.metric("🖼️ Info-graphics", desc_img_count)
+                st.metric("Info-graphics", desc_img_count)
         
         # Image Gallery View
         st.markdown("---")
-        st.subheader("🖼️ Product Gallery")
+        st.subheader(":material/gallery_thumbnail: Product Gallery")
         
         # Display options
         col_gallery, col_filter = st.columns([3, 1])
@@ -992,21 +988,21 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
                             # Status badges
                             badge_text = []
                             if item.get('Is Refurbished') == 'YES':
-                                badge_text.append("🔄")
+                                badge_text.append("[Refurbished]")
                             if item.get('Has Warranty') == 'YES':
-                                badge_text.append("🛡️")
+                                badge_text.append("[Warranty]")
                             if item.get('Has refurb tag') == 'YES':
-                                badge_text.append("🏷️")
+                                badge_text.append("[Tag]")
                             if item.get('Express') == 'Yes':
-                                badge_text.append("⚡")
+                                badge_text.append("[Express]")
                             if item.get('Has info-graphics') == 'YES':
-                                badge_text.append("🖼️")
+                                badge_text.append("[Graphics]")
                             
                             if badge_text:
-                                st.caption(" ".join(badge_text))
+                                st.caption(" • ".join(badge_text))
                             
                             # Price and SKU
-                            st.caption(f"💰 {item.get('Price', 'N/A')}")
+                            st.caption(f"**Price:** {item.get('Price', 'N/A')}")
                             with st.expander("Details"):
                                 st.caption(f"**SKU:** {item.get('SKU', 'N/A')}")
                                 st.caption(f"**Seller:** {item.get('Seller Name', 'N/A')}")
@@ -1037,7 +1033,7 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
                         with info_cols[1]:
                             # Logic for displaying status text
                             refurb_val = item.get('Is Refurbished')
-                            refurb_status = f"✅ YES" if refurb_val == 'YES' else "❌ NO"
+                            refurb_status = f"YES" if refurb_val == 'YES' else "NO"
                             st.caption(f"**Refurbished:** {refurb_status}")
                         with info_cols[2]:
                             warranty_status = item.get('Warranty Duration', 'N/A')
@@ -1045,7 +1041,7 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
                         with info_cols[3]:
                             st.caption(f"**Price:** {item.get('Price', 'N/A')}")
                         with info_cols[4]:
-                            badge_icon = "✅" if item.get('grading tag', '').startswith('YES') else "❌"
+                            badge_icon = "Yes" if item.get('grading tag', '').startswith('YES') else "No"
                             st.caption(f"**Grading Tag:** {badge_icon}")
                         
                         # Second row
@@ -1055,7 +1051,7 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
                         with detail_cols[1]:
                             st.caption(f"**SKU:** {item.get('SKU', 'N/A')}")
                         with detail_cols[2]:
-                            desc_img = "✅" if item.get('Has info-graphics') == 'YES' else "❌"
+                            desc_img = "Yes" if item.get('Has info-graphics') == 'YES' else "No"
                             st.caption(f"**Info-graphics:** {desc_img}")
                     
                     st.divider()
@@ -1063,13 +1059,13 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
         # Refurbished Status Breakdown
         if (df['Is Refurbished'] == 'YES').any():
             st.markdown("---")
-            st.markdown("### 🔄 Refurbished Products Details")
+            st.markdown("### :material/autorenew: Refurbished Products Details")
             refurb_df = df[df['Is Refurbished'] == 'YES']
             st.dataframe(refurb_df, use_container_width=True)
         
         # Full Results (Highlighted)
         st.markdown("---")
-        st.markdown("### 📋 Complete Analysis Results")
+        st.markdown("### :material/table: Complete Analysis Results")
         
         # Highlighting function for Renewed brands (Row highlight includes Brand column)
         def highlight_renewed(row):
@@ -1087,9 +1083,10 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
         # Download button
         csv = df.to_csv(index=False).encode('utf-8')
         st.download_button(
-            "📥 Download Complete Analysis (CSV)",
+            "Download Complete Analysis (CSV)",
             csv,
             f"refurbished_analysis_{int(time.time())}.csv",
             "text/csv",
-            key='download-csv'
+            key='download-csv',
+            icon=":material/download:"
         )
