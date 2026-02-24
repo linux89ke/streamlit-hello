@@ -21,8 +21,8 @@ import numpy as np
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Refurbished Product Analyzer", layout="wide")
-st.title(":material/sync: Refurbished Product Data Extractor & Analyzer")
-st.markdown("*Specialized scraper for refurbished/renewed product verification*")
+st.title(":material/sync: Refurbished Product Data Extractor")
+
 
 # --- SIDEBAR ---
 with st.sidebar:
