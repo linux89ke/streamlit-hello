@@ -380,6 +380,46 @@ def extract_seller_info(soup):
     
     return seller_data
 
+# --- 5b. CATEGORY URL EXTRACTION ---
+def extract_category_links(category_url, headless=True, timeout=20):
+    """
+    Visits a Jumia catalog/category URL and extracts all product links on the page.
+    """
+    driver = get_driver(headless, timeout)
+    if not driver:
+        return []
+    
+    extracted_urls = set()
+    try:
+        driver.get(category_url)
+        # Wait for products to load
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "article.prd a.core"))
+        )
+        
+        # Scroll a bit to trigger any lazy-loaded elements
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight/2);")
+        time.sleep(2)
+        
+        product_elements = driver.find_elements(By.CSS_SELECTOR, "article.prd a.core")
+        for elem in product_elements:
+            href = elem.get_attribute("href")
+            if href and "/product/" in href or ".html" in href:
+                extracted_urls.add(href)
+                
+    except TimeoutException:
+        st.error(f"Timeout while trying to load the category URL: {category_url}")
+    except Exception as e:
+        st.error(f"Error extracting links from category: {e}")
+    finally:
+        if driver:
+            try:
+                driver.quit()
+            except:
+                pass
+                
+    return list(extracted_urls)
+
 # --- 6. INPUT PROCESSING ---
 def process_inputs(text_input, file_input, default_domain):
     """Process inputs efficiently."""
@@ -727,20 +767,41 @@ if 'scraped_results' not in st.session_state:
 if 'failed_items' not in st.session_state:
     st.session_state['failed_items'] = []
 
+st.markdown("### 📥 Input Data")
 col_txt, col_upl = st.columns(2)
 with col_txt:
-    text_in = st.text_area("Paste SKUs/Links:", height=150, 
+    text_in = st.text_area("Paste SKUs/Links:", height=100, 
                            placeholder="Enter SKUs or URLs, one per line\nExample: SA948MP5EER52NAFAMZ")
 with col_upl:
     file_in = st.file_uploader("Upload Excel/CSV with SKUs:", type=['xlsx', 'csv'])
 
+category_url_in = st.text_input("🌐 Or paste a Category/Search URL (Extracts all products on the page):", 
+                                placeholder="https://www.jumia.co.ke/smartphones/")
+
 st.markdown("---")
 
 if st.button("🚀 Start Refurbished Product Analysis", type="primary"):
+    # 1. Process standard SKUs / Links
     targets = process_inputs(text_in, file_in, domain)
     
+    # 2. Extract from Category URL if provided
+    if category_url_in:
+        with st.spinner("🌐 Extracting product links from category page..."):
+            cat_links = extract_category_links(
+                category_url_in, 
+                headless=not show_browser, 
+                timeout=timeout_seconds
+            )
+            for link in cat_links:
+                targets.append({"type": "url", "value": link, "original_sku": link})
+            
+            if cat_links:
+                st.success(f"✅ Extracted {len(cat_links)} products from the category URL.")
+            else:
+                st.warning("⚠️ Could not find any product links on the provided category URL.")
+    
     if not targets:
-        st.warning("⚠️ No valid data found. Please enter SKUs or URLs.")
+        st.warning("⚠️ No valid data found. Please enter SKUs, URLs, or a Category URL.")
     else:
         st.session_state['scraped_results'] = []
         st.session_state['failed_items'] = []
