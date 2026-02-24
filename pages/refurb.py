@@ -771,7 +771,7 @@ with col_txt:
 with col_upl:
     file_in = st.file_uploader("Upload Excel/CSV with SKUs:", type=['xlsx', 'csv'])
 
-category_url_in = st.text_input(":material/language: Or paste a Category/Search URL (Extracts all products on the page):", 
+category_url_in = st.text_input(":material/language: Search URL (Extracts all products on the page):", 
                                 placeholder="https://www.jumia.co.ke/smartphones/")
 
 st.markdown("---")
