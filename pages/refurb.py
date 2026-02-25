@@ -632,14 +632,17 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
     for container in desc_containers:
         for img in container.find_all('img'):
             src = (img.get('data-src') or img.get('src') or '').strip()
-            if not src or src.startswith('data:') or len(src) < 15:
+            # Skip empty, base64, or tiny 1x1 tracking pixels
+            if not src or src.startswith('data:') or len(src) < 15 or '1x1' in src:
                 continue
             seen_info_imgs.add(src)
 
+    # CMS Fallback: MUST be "external" to avoid counting Jumia campaign banners!
     if not seen_info_imgs:
         for img in soup.find_all('img'):
             src = (img.get('data-src') or img.get('src') or '').strip()
-            if '/cms/external/' in src or '/cms/' in src:
+            # Only count if it's explicitly a seller-uploaded image in the external folder
+            if '/cms/external/' in src:
                 if not src.endswith('.svg') and src not in seen_info_imgs:
                     seen_info_imgs.add(src)
 
