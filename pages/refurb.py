@@ -118,14 +118,12 @@ def get_driver(headless=True, timeout=20):
 def get_dhash(img):
     """Calculate Difference Hash (dHash) for an image to allow perceptual comparison."""
     try:
-        # Resize to 9x8 and convert to grayscale
         if hasattr(Image, 'Resampling'):
             resample_mode = Image.Resampling.LANCZOS
         else:
             resample_mode = Image.LANCZOS
         img = img.convert('L').resize((9, 8), resample_mode)
         pixels = np.array(img)
-        # Compare adjacent pixels
         diff = pixels[:, 1:] > pixels[:, :-1]
         return diff.flatten()
     except Exception:
@@ -553,7 +551,7 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
     data['Total Product Images'] = len(data['Image URLs'])
 
     # 6B. TARGET IMAGE HASH COMPARISON (Check last image in gallery)
-    data['Promo Last Image'] = 'NO'
+    data['Grading last image'] = 'NO'
     if data['Image URLs']:
         target_hash = get_target_promo_hash()
         if target_hash is not None:
@@ -564,10 +562,9 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
                 last_hash = get_dhash(last_img)
                 
                 if last_hash is not None:
-                    # Compare bits: if they differ by <= 10 bits out of 64, it's considered a match
                     hamming_dist = np.count_nonzero(target_hash != last_hash)
-                    if hamming_dist <= 12:  # Tolerance for compression/resizing
-                        data['Promo Last Image'] = 'YES'
+                    if hamming_dist <= 12:
+                        data['Grading last image'] = 'YES'
             except Exception:
                 pass
 
@@ -618,7 +615,7 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
         if rating_match:
             data['Product Rating'] = rating_match.group(1) + '/5'
     
-    # 12. Infographics (CATCHES *ANY* IMAGE IN DESCRIPTION + CMS FALLBACK)
+    # 12. Infographics
     infographic_count = 0
     seen_info_imgs = set()
 
@@ -676,7 +673,7 @@ def scrape_item_enhanced(target, headless=True, timeout=20, check_images=True):
         'Primary Image URL': 'N/A',
         'Image URLs': [],
         'Total Product Images': 0,
-        'Promo Last Image': 'NO',
+        'Grading last image': 'NO',
         'Price': 'N/A',
         'Product Rating': 'N/A',
         'Express': 'No',
@@ -884,7 +881,7 @@ if st.button("Start Refurbished Product Analysis", type="primary", icon=":materi
                                 st.caption("Image unavailable")
                     with col2:
                         st.caption(f"**Last processed:** {last_item.get('Product Name', 'N/A')[:60]}...")
-                        st.caption(f"Images: {last_item.get('Total Product Images', 0)} | Refurb: {last_item.get('Is Refurbished', 'NO')} | Promo Img: {last_item.get('Promo Last Image', 'NO')}")
+                        st.caption(f"Images: {last_item.get('Total Product Images', 0)} | Refurb: {last_item.get('Is Refurbished', 'NO')} | Grading Img: {last_item.get('Grading last image', 'NO')}")
         
         elapsed = time.time() - start_time
         st.session_state['scraped_results'] = all_results
@@ -925,7 +922,7 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
         # New Column Ordering
         priority_cols = [
             'SKU', 'Product Name', 'Brand', 'Is Refurbished', 'Has refurb tag',
-            'Has Warranty', 'Warranty Duration', 'Total Product Images', 'Promo Last Image', 'grading tag',
+            'Has Warranty', 'Warranty Duration', 'Total Product Images', 'Grading last image', 'grading tag',
             'Has info-graphics', 'Infographic Image Count',
             'Seller Name', 
             'Price', 'Product Rating', 'Express', 
@@ -945,9 +942,9 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
             refurb_count = (df['Is Refurbished'] == 'YES').sum()
             st.metric("Refurbished Items", refurb_count)
         with col3:
-            if 'Promo Last Image' in df.columns:
-                promo_img_count = (df['Promo Last Image'] == 'YES').sum()
-                st.metric("Has Promo Graphic", promo_img_count)
+            if 'Grading last image' in df.columns:
+                grading_img_count = (df['Grading last image'] == 'YES').sum()
+                st.metric("Has Grading Image", grading_img_count)
         with col4:
             if 'grading tag' in df.columns:
                 badge_count = df['grading tag'].str.contains('YES', na=False).sum()
@@ -994,7 +991,7 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
                             
                             badge_text = []
                             if item.get('Is Refurbished') == 'YES': badge_text.append("[Refurbished]")
-                            if item.get('Promo Last Image') == 'YES': badge_text.append("[Promo Graphic]")
+                            if item.get('Grading last image') == 'YES': badge_text.append("[Grading Img]")
                             if item.get('Total Product Images', 0) > 0: badge_text.append(f"[{item['Total Product Images']} Images]")
                             
                             if badge_text:
@@ -1026,7 +1023,7 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
                         with info_cols[1]: 
                             refurb_status = "YES" if item.get('Is Refurbished') == 'YES' else "NO"
                             st.caption(f"**Refurbished:** {refurb_status}")
-                        with info_cols[2]: st.caption(f"**Promo Graphic:** {item.get('Promo Last Image', 'NO')}")
+                        with info_cols[2]: st.caption(f"**Grading Last Image:** {item.get('Grading last image', 'NO')}")
                         with info_cols[3]: st.caption(f"**Price:** {item.get('Price', 'N/A')}")
                         with info_cols[4]: st.caption(f"**Images:** {item.get('Total Product Images', 0)}")
                         
