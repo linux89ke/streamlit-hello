@@ -23,7 +23,6 @@ import numpy as np
 st.set_page_config(page_title="Refurbished Product Analyzer", layout="wide")
 st.title(":material/sync: Refurbished Product Data Extractor")
 
-
 # --- SIDEBAR ---
 with st.sidebar:
     st.header(":material/settings: Settings")
@@ -250,7 +249,6 @@ def extract_warranty_info(soup, product_name):
 def detect_refurbished_status(soup, product_name):
     """
     Detect if product is refurbished from multiple indicators.
-    FIX: Scopes search to the main product container to avoid false positives.
     """
     refurb_data = {
         'is_refurbished': 'NO',
@@ -540,11 +538,11 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
 
     data['SKU'] = clean_jumia_sku(sku_found)
 
-    # 6. Images
+    # 6. Images & Count
     image_url = None
     for img in soup.find_all('img', limit=15):
         src = img.get('data-src') or img.get('src')
-        if src and ('/product/' in src or '/unsafe/' in src):
+        if src and ('/product/' in src or '/unsafe/' in src) and not src.startswith('data:'):
             if src.startswith('//'):
                 src = 'https:' + src
             elif src.startswith('/'):
@@ -554,7 +552,9 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
                 data['Image URLs'].append(src)
                 if not image_url:
                     image_url = src
+                    
     data['Primary Image URL'] = image_url if image_url else "N/A"
+    data['Total Product Images'] = len(data['Image URLs'])
 
     # 7. Refurbished Status
     refurb_status = detect_refurbished_status(soup, product_name)
@@ -605,24 +605,46 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
             data['Product Rating'] = rating_match.group(1) + '/5'
     
     # 12. Check for Description Images/Infographics
-    desc_section = soup.find('div', class_=re.compile(r'markup|product-desc|detail'))
+    # Strategy 1: class-based (Jumia uses 'markup' as a standard class for descriptions)
+    desc_section = soup.find('div', class_=re.compile(r'\bmarkup\b', re.I))
+
+    # Strategy 2: data-testid attribute (modern Jumia frontend)
     if not desc_section:
-        header = soup.find(['h2', 'div'], string=re.compile(r'Product details|Description', re.I))
-        if header:
-            desc_section = header.find_next('div')
+        desc_section = soup.find('div', attrs={'data-testid': re.compile(r'description|markup', re.I)})
+
+    # Strategy 3: Search for headings by text content (get_text() handles icons inside tags)
+    if not desc_section:
+        for tag in soup.find_all(['h2', 'h3', 'div']):
+            tag_text = tag.get_text().strip()
+            if re.search(r'Product\s+details?|Description|About\s+this\s+item', tag_text, re.I):
+                candidate = tag.find_next_sibling('div') or tag.find_next('div')
+                if candidate:
+                    desc_section = candidate
+                    break
 
     data['Has info-graphics'] = 'NO'
-    
+    infographic_count = 0
+
     if desc_section:
-        desc_images = desc_section.find_all('img')
-        count = 0
-        for img in desc_images:
-            src = img.get('data-src') or img.get('src', '')
-            if src and len(src) > 10 and ('.jpg' in src or '.png' in src or '.jpeg' in src or '.webp' in src):
-                count += 1
-        
-        if count > 0:
-             data['Has info-graphics'] = 'YES'
+        for img in desc_section.find_all('img'):
+            # Grab data-src (lazy load) or src
+            src = (img.get('data-src') or img.get('src') or '').strip()
+            
+            # Skip empty, tiny, or base64 placeholder images
+            if not src or src.startswith('data:') or len(src) < 15:
+                continue
+                
+            # Logic: Has image extension OR contains Jumia/CDN product paths
+            has_ext = bool(re.search(r'\.(jpg|jpeg|png|webp|gif)(\?|$)', src, re.I))
+            is_cdn  = any(p in src for p in ['/unsafe/', '/product/', 'imagekit', 'cloudinary', 'jumia.is'])
+            
+            if has_ext or is_cdn:
+                infographic_count += 1
+
+    if infographic_count > 0:
+        data['Has info-graphics'] = 'YES'
+    
+    data['Infographic Image Count'] = infographic_count
 
     return data
 
@@ -649,10 +671,12 @@ def scrape_item_enhanced(target, headless=True, timeout=20, check_images=True):
         'grading tag': 'Not Checked',
         'Primary Image URL': 'N/A',
         'Image URLs': [],
+        'Total Product Images': 0,
         'Price': 'N/A',
         'Product Rating': 'N/A',
         'Express': 'No',
-        'Has info-graphics': 'NO'
+        'Has info-graphics': 'NO',
+        'Infographic Image Count': 0
     }
 
     try:
@@ -864,7 +888,6 @@ if st.button("Start Refurbished Product Analysis", type="primary", icon=":materi
                                 st.caption("Image unavailable")
                     with col2:
                         st.caption(f"**Last processed:** {last_item.get('Product Name', 'N/A')[:60]}...")
-                        # Updated status check for YES/NO
                         refurb_text = last_item.get('Is Refurbished', 'NO')
                         refurb_icon = "Yes" if refurb_text == 'YES' else "No"
                         warranty_icon = "Yes" if last_item.get('Has Warranty') == 'YES' else "No"
@@ -913,7 +936,7 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
         priority_cols = [
             'SKU', 'Product Name', 'Brand', 'Is Refurbished', 'Has refurb tag',
             'Has Warranty', 'Warranty Duration', 'grading tag',
-            'Has info-graphics',
+            'Has info-graphics', 'Infographic Image Count', 'Total Product Images',
             'Seller Name', 
             'Price', 'Product Rating', 'Express', 
             'Category', 'Refurbished Indicators', 
@@ -1031,7 +1054,6 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
                         with info_cols[0]:
                             st.caption(f"**Brand:** {item.get('Brand', 'N/A')}")
                         with info_cols[1]:
-                            # Logic for displaying status text
                             refurb_val = item.get('Is Refurbished')
                             refurb_status = f"YES" if refurb_val == 'YES' else "NO"
                             st.caption(f"**Refurbished:** {refurb_status}")
