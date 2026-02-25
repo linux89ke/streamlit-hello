@@ -121,9 +121,7 @@ def get_driver(headless=True, timeout=20):
 
 # --- 2. IMAGE ANALYSIS FOR RED BADGES ---
 def has_red_badge(image_url):
-    """
-    Analyze product image to detect red refurbished badges/tags.
-    """
+    """Analyze product image to detect red refurbished badges/tags."""
     try:
         response = requests.get(image_url, timeout=10)
         img = Image.open(BytesIO(response.content))
@@ -502,46 +500,35 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
 
     data['SKU'] = clean_jumia_sku(sku_found)
 
-    # ==========================================================
-    # 6. PERFECTED PRODUCT IMAGES EXTRACTION
-    # ==========================================================
+    # 6. PRODUCT IMAGES EXTRACTION (Main Gallery)
     data['Image URLs'] = []
     image_url = None
     
-    # 1. Isolate the main image gallery container
-    # Jumia uses IDs like 'imgs' or classes like 'sldr', 'gallery', '-pas' for the main slider
     gallery_container = soup.find('div', id='imgs') or soup.find('div', class_=re.compile(r'\bsldr\b|\bgallery\b|-pas', re.I))
     search_scope = gallery_container if gallery_container else soup
 
     for img in search_scope.find_all('img'):
         src = (img.get('data-src') or img.get('src') or '').strip()
         
-        # Only process Jumia product images (ignore base64, tracking pixels, etc)
         if src and '/product/' in src and not src.startswith('data:'):
             if src.startswith('//'):
                 src = 'https:' + src
             elif src.startswith('/'):
                 src = 'https://www.jumia.co.ke' + src
             
-            # Extract the pure base ID to avoid counting thumbnails and main views twice
-            # Matches strings like: /product/00/7972613/1.jpg
             base_match = re.search(r'(/product/[a-z0-9_/-]+\.(?:jpg|jpeg|png|webp))', src, re.IGNORECASE)
             base_path = base_match.group(1) if base_match else src
             
-            # Check if we already added a version of this image
             if not any(base_path in existing_url for existing_url in data['Image URLs']):
                 data['Image URLs'].append(src)
                 if not image_url:
                     image_url = src
                     
-        # If we couldn't find the gallery and are searching the whole page, 
-        # stop early to avoid grabbing "Customers also viewed" images at the bottom.
         if not gallery_container and len(data['Image URLs']) >= 8:
             break
             
     data['Primary Image URL'] = image_url if image_url else "N/A"
     data['Total Product Images'] = len(data['Image URLs'])
-    # ==========================================================
 
     # 7. Refurbished Status
     refurb_status = detect_refurbished_status(soup, product_name)
@@ -590,7 +577,7 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
         if rating_match:
             data['Product Rating'] = rating_match.group(1) + '/5'
     
-    # 12. Infographics
+    # 12. Infographics (CATCHES *ANY* IMAGE IN DESCRIPTION)
     desc_section = soup.find('div', class_=re.compile(r'\bmarkup\b', re.I))
     if not desc_section:
         desc_section = soup.find('div', attrs={'data-testid': re.compile(r'description|markup', re.I)})
@@ -609,14 +596,13 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
     if desc_section:
         for img in desc_section.find_all('img'):
             src = (img.get('data-src') or img.get('src') or '').strip()
-            if not src or src.startswith('data:') or len(src) < 15:
-                continue
-                
-            has_ext = bool(re.search(r'\.(jpg|jpeg|png|webp|gif)(\?|$)', src, re.I))
-            is_cdn  = any(p in src for p in ['/unsafe/', '/product/', 'imagekit', 'cloudinary', 'jumia.is'])
             
-            if has_ext or is_cdn:
-                infographic_count += 1
+            # Skip empty or base64 data URIs (often used for placeholders/spinners)
+            if not src or src.startswith('data:image') or len(src) < 10:
+                continue
+            
+            # If it's an image tag inside the description div and has a real URL, count it.
+            infographic_count += 1
 
     if infographic_count > 0:
         data['Has info-graphics'] = 'YES'
