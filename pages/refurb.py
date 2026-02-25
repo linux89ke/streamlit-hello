@@ -55,7 +55,6 @@ def get_chrome_options(headless=True):
     if headless:
         chrome_options.add_argument("--headless=new")
     
-    # Essential stability arguments
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
@@ -63,8 +62,6 @@ def get_chrome_options(headless=True):
     chrome_options.add_argument("--disable-extensions")
     chrome_options.add_argument("--window-size=1920,1080")
     chrome_options.add_argument("--disable-notifications")
-    
-    # Reduce resource usage
     chrome_options.add_argument("--disable-logging")
     chrome_options.add_argument("--log-level=3")
     chrome_options.add_argument("--silent")
@@ -74,7 +71,6 @@ def get_chrome_options(headless=True):
         "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
 
-    # Detect browser binary
     possible_paths = [
         "/usr/bin/chromium", 
         "/usr/bin/chromium-browser", 
@@ -118,7 +114,34 @@ def get_driver(headless=True, timeout=20):
     
     return driver
 
-# --- 2. IMAGE ANALYSIS FOR RED BADGES ---
+# --- 2. IMAGE ANALYSIS & HASHING ---
+def get_dhash(img):
+    """Calculate Difference Hash (dHash) for an image to allow perceptual comparison."""
+    try:
+        # Resize to 9x8 and convert to grayscale
+        if hasattr(Image, 'Resampling'):
+            resample_mode = Image.Resampling.LANCZOS
+        else:
+            resample_mode = Image.LANCZOS
+        img = img.convert('L').resize((9, 8), resample_mode)
+        pixels = np.array(img)
+        # Compare adjacent pixels
+        diff = pixels[:, 1:] > pixels[:, :-1]
+        return diff.flatten()
+    except Exception:
+        return None
+
+@st.cache_data
+def get_target_promo_hash():
+    """Cache the hash of the target promotional image."""
+    target_url = "https://ke.jumia.is/unsafe/fit-in/680x680/filters:fill(white)/product/21/3620523/3.jpg?0053"
+    try:
+        response = requests.get(target_url, timeout=10)
+        img = Image.open(BytesIO(response.content))
+        return get_dhash(img)
+    except Exception:
+        return None
+
 def has_red_badge(image_url):
     """Analyze product image to detect red refurbished badges/tags."""
     try:
@@ -529,6 +552,25 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
     data['Primary Image URL'] = image_url if image_url else "N/A"
     data['Total Product Images'] = len(data['Image URLs'])
 
+    # 6B. TARGET IMAGE HASH COMPARISON (Check last image in gallery)
+    data['Promo Last Image'] = 'NO'
+    if data['Image URLs']:
+        target_hash = get_target_promo_hash()
+        if target_hash is not None:
+            last_image_url = data['Image URLs'][-1]
+            try:
+                resp = requests.get(last_image_url, timeout=10)
+                last_img = Image.open(BytesIO(resp.content))
+                last_hash = get_dhash(last_img)
+                
+                if last_hash is not None:
+                    # Compare bits: if they differ by <= 10 bits out of 64, it's considered a match
+                    hamming_dist = np.count_nonzero(target_hash != last_hash)
+                    if hamming_dist <= 12:  # Tolerance for compression/resizing
+                        data['Promo Last Image'] = 'YES'
+            except Exception:
+                pass
+
     # 7. Refurbished Status
     refurb_status = detect_refurbished_status(soup, product_name)
     data['Is Refurbished'] = refurb_status['is_refurbished']
@@ -580,10 +622,8 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
     infographic_count = 0
     seen_info_imgs = set()
 
-    # Strategy A: Look in known description containers
     desc_containers = soup.find_all('div', class_=re.compile(r'\bmarkup\b|product-desc|-mhm', re.I))
     
-    # Strategy B: Look by Header if container fails
     if not desc_containers:
         for tag in soup.find_all(['h2', 'h3', 'div']):
             if re.search(r'Product\s+details?|Description', tag.get_text(), re.I):
@@ -592,23 +632,17 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
                     desc_containers.append(candidate)
                     break
 
-    # Count images found in description containers
     for container in desc_containers:
         for img in container.find_all('img'):
             src = (img.get('data-src') or img.get('src') or '').strip()
-            # Ignore base64, tiny tracking pixels
             if not src or src.startswith('data:') or len(src) < 15:
                 continue
             seen_info_imgs.add(src)
 
-    # Strategy C: The Bulletproof CMS Fallback
-    # Sellers upload infographics to Jumia's CMS. ANY image on the page with '/cms/' 
-    # that isn't a UI element is a seller-uploaded infographic, regardless of where it is.
     if not seen_info_imgs:
         for img in soup.find_all('img'):
             src = (img.get('data-src') or img.get('src') or '').strip()
             if '/cms/external/' in src or '/cms/' in src:
-                # Ignore UI icons (usually svg or tiny files)
                 if not src.endswith('.svg') and src not in seen_info_imgs:
                     seen_info_imgs.add(src)
 
@@ -642,6 +676,7 @@ def scrape_item_enhanced(target, headless=True, timeout=20, check_images=True):
         'Primary Image URL': 'N/A',
         'Image URLs': [],
         'Total Product Images': 0,
+        'Promo Last Image': 'NO',
         'Price': 'N/A',
         'Product Rating': 'N/A',
         'Express': 'No',
@@ -695,7 +730,6 @@ def scrape_item_enhanced(target, headless=True, timeout=20, check_images=True):
             return data
         
         try:
-            # Scroll down in steps to trigger all of Jumia's lazy-loaded containers
             for scroll_step in [800, 1600, 2400, 3200]:
                 driver.execute_script(f"window.scrollTo(0, {scroll_step});")
                 time.sleep(0.5)
@@ -850,7 +884,7 @@ if st.button("Start Refurbished Product Analysis", type="primary", icon=":materi
                                 st.caption("Image unavailable")
                     with col2:
                         st.caption(f"**Last processed:** {last_item.get('Product Name', 'N/A')[:60]}...")
-                        st.caption(f"Images: {last_item.get('Total Product Images', 0)} | Refurb: {last_item.get('Is Refurbished', 'NO')} | Brand: {last_item.get('Brand', 'N/A')}")
+                        st.caption(f"Images: {last_item.get('Total Product Images', 0)} | Refurb: {last_item.get('Is Refurbished', 'NO')} | Promo Img: {last_item.get('Promo Last Image', 'NO')}")
         
         elapsed = time.time() - start_time
         st.session_state['scraped_results'] = all_results
@@ -891,7 +925,7 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
         # New Column Ordering
         priority_cols = [
             'SKU', 'Product Name', 'Brand', 'Is Refurbished', 'Has refurb tag',
-            'Has Warranty', 'Warranty Duration', 'Total Product Images', 'grading tag',
+            'Has Warranty', 'Warranty Duration', 'Total Product Images', 'Promo Last Image', 'grading tag',
             'Has info-graphics', 'Infographic Image Count',
             'Seller Name', 
             'Price', 'Product Rating', 'Express', 
@@ -911,8 +945,9 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
             refurb_count = (df['Is Refurbished'] == 'YES').sum()
             st.metric("Refurbished Items", refurb_count)
         with col3:
-            warranty_count = (df['Has Warranty'] == 'YES').sum()
-            st.metric("With Warranty", warranty_count)
+            if 'Promo Last Image' in df.columns:
+                promo_img_count = (df['Promo Last Image'] == 'YES').sum()
+                st.metric("Has Promo Graphic", promo_img_count)
         with col4:
             if 'grading tag' in df.columns:
                 badge_count = df['grading tag'].str.contains('YES', na=False).sum()
@@ -959,8 +994,8 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
                             
                             badge_text = []
                             if item.get('Is Refurbished') == 'YES': badge_text.append("[Refurbished]")
+                            if item.get('Promo Last Image') == 'YES': badge_text.append("[Promo Graphic]")
                             if item.get('Total Product Images', 0) > 0: badge_text.append(f"[{item['Total Product Images']} Images]")
-                            if item.get('Has Warranty') == 'YES': badge_text.append("[Warranty]")
                             
                             if badge_text:
                                 st.caption(" • ".join(badge_text))
@@ -991,9 +1026,9 @@ if st.session_state['scraped_results'] or st.session_state['failed_items']:
                         with info_cols[1]: 
                             refurb_status = "YES" if item.get('Is Refurbished') == 'YES' else "NO"
                             st.caption(f"**Refurbished:** {refurb_status}")
-                        with info_cols[2]: st.caption(f"**Images:** {item.get('Total Product Images', 0)}")
+                        with info_cols[2]: st.caption(f"**Promo Graphic:** {item.get('Promo Last Image', 'NO')}")
                         with info_cols[3]: st.caption(f"**Price:** {item.get('Price', 'N/A')}")
-                        with info_cols[4]: st.caption(f"**Grading Tag:** {'Yes' if item.get('grading tag', '').startswith('YES') else 'No'}")
+                        with info_cols[4]: st.caption(f"**Images:** {item.get('Total Product Images', 0)}")
                         
                         detail_cols = st.columns(3)
                         with detail_cols[0]: st.caption(f"**Seller:** {item.get('Seller Name', 'N/A')}")
