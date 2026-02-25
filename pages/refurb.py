@@ -23,7 +23,6 @@ import numpy as np
 st.set_page_config(page_title="Refurbished Product Analyzer", layout="wide")
 st.title(":material/sync: Refurbished Product Data Extractor")
 
-
 # --- SIDEBAR ---
 with st.sidebar:
     st.header(":material/settings: Settings")
@@ -577,37 +576,45 @@ def extract_product_data_enhanced(soup, data, is_sku_search, target, check_image
         if rating_match:
             data['Product Rating'] = rating_match.group(1) + '/5'
     
-    # 12. Infographics (CATCHES *ANY* IMAGE IN DESCRIPTION)
-    desc_section = soup.find('div', class_=re.compile(r'\bmarkup\b', re.I))
-    if not desc_section:
-        desc_section = soup.find('div', attrs={'data-testid': re.compile(r'description|markup', re.I)})
-    if not desc_section:
+    # 12. Infographics (CATCHES *ANY* IMAGE IN DESCRIPTION + CMS FALLBACK)
+    infographic_count = 0
+    seen_info_imgs = set()
+
+    # Strategy A: Look in known description containers
+    desc_containers = soup.find_all('div', class_=re.compile(r'\bmarkup\b|product-desc|-mhm', re.I))
+    
+    # Strategy B: Look by Header if container fails
+    if not desc_containers:
         for tag in soup.find_all(['h2', 'h3', 'div']):
-            tag_text = tag.get_text().strip()
-            if re.search(r'Product\s+details?|Description|About\s+this\s+item', tag_text, re.I):
+            if re.search(r'Product\s+details?|Description', tag.get_text(), re.I):
                 candidate = tag.find_next_sibling('div') or tag.find_next('div')
                 if candidate:
-                    desc_section = candidate
+                    desc_containers.append(candidate)
                     break
 
-    data['Has info-graphics'] = 'NO'
-    infographic_count = 0
-
-    if desc_section:
-        for img in desc_section.find_all('img'):
+    # Count images found in description containers
+    for container in desc_containers:
+        for img in container.find_all('img'):
             src = (img.get('data-src') or img.get('src') or '').strip()
-            
-            # Skip empty or base64 data URIs (often used for placeholders/spinners)
-            if not src or src.startswith('data:image') or len(src) < 10:
+            # Ignore base64, tiny tracking pixels
+            if not src or src.startswith('data:') or len(src) < 15:
                 continue
-            
-            # If it's an image tag inside the description div and has a real URL, count it.
-            infographic_count += 1
+            seen_info_imgs.add(src)
 
-    if infographic_count > 0:
-        data['Has info-graphics'] = 'YES'
-    
+    # Strategy C: The Bulletproof CMS Fallback
+    # Sellers upload infographics to Jumia's CMS. ANY image on the page with '/cms/' 
+    # that isn't a UI element is a seller-uploaded infographic, regardless of where it is.
+    if not seen_info_imgs:
+        for img in soup.find_all('img'):
+            src = (img.get('data-src') or img.get('src') or '').strip()
+            if '/cms/external/' in src or '/cms/' in src:
+                # Ignore UI icons (usually svg or tiny files)
+                if not src.endswith('.svg') and src not in seen_info_imgs:
+                    seen_info_imgs.add(src)
+
+    infographic_count = len(seen_info_imgs)
     data['Infographic Image Count'] = infographic_count
+    data['Has info-graphics'] = 'YES' if infographic_count > 0 else 'NO'
 
     return data
 
@@ -688,8 +695,10 @@ def scrape_item_enhanced(target, headless=True, timeout=20, check_images=True):
             return data
         
         try:
-            driver.execute_script("window.scrollTo(0, 800);")
-            time.sleep(1)
+            # Scroll down in steps to trigger all of Jumia's lazy-loaded containers
+            for scroll_step in [800, 1600, 2400, 3200]:
+                driver.execute_script(f"window.scrollTo(0, {scroll_step});")
+                time.sleep(0.5)
         except Exception:
             pass
         
