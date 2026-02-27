@@ -22,8 +22,338 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("Jumia Refurbished Product Suite")
-st.caption("Analyze listings · Apply grade tags · Convert existing tags")
+# ══════════════════════════════════════════════════════════════════════════════
+#  JUMIA BRAND THEME  (injected once, right after set_page_config)
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown("""
+<style>
+/* ── Jumia palette ──────────────────────────────────────────────────────────
+   Primary orange : #F68B1E
+   Dark orange    : #D4730A
+   Light orange bg: #FFF4E6
+   Dark text      : #1A1A1A
+   Mid grey       : #6B6B6B
+   Border grey    : #E0E0E0
+   White          : #FFFFFF
+──────────────────────────────────────────────────────────────────────────── */
+
+/* Google Font — Nunito (clean, friendly, close to Jumia's wordmark feel) */
+@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap');
+
+html, body, [class*="css"] {
+    font-family: 'Nunito', sans-serif;
+    color: #1A1A1A;
+}
+
+/* ── Page background ──────────────────────────────────────────────────────── */
+.stApp {
+    background-color: #FAFAFA;
+}
+
+/* ── Sidebar ──────────────────────────────────────────────────────────────── */
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #1A1A1A 0%, #2D2D2D 100%);
+    border-right: 3px solid #F68B1E;
+}
+[data-testid="stSidebar"] * {
+    color: #F5F5F5 !important;
+}
+[data-testid="stSidebar"] .stSelectbox label,
+[data-testid="stSidebar"] .stSlider label,
+[data-testid="stSidebar"] .stCheckbox label,
+[data-testid="stSidebar"] .stRadio label {
+    color: #CCCCCC !important;
+    font-size: 0.85rem;
+}
+[data-testid="stSidebar"] h1,
+[data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] h3 {
+    color: #F68B1E !important;
+    font-weight: 800;
+    font-size: 0.95rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border-bottom: 1px solid #F68B1E44;
+    padding-bottom: 4px;
+    margin-bottom: 8px;
+}
+/* Sidebar selectbox / slider track colour */
+[data-testid="stSidebar"] [data-baseweb="select"] {
+    background-color: #3A3A3A !important;
+    border-color: #F68B1E !important;
+}
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
+    color: #AAAAAA !important;
+    font-size: 0.8rem;
+}
+
+/* Sidebar info box */
+[data-testid="stSidebar"] .stAlert {
+    background-color: #F68B1E22 !important;
+    border-left: 4px solid #F68B1E !important;
+    color: #F68B1E !important;
+}
+
+/* ── Top header bar ───────────────────────────────────────────────────────── */
+.jumia-header {
+    background: linear-gradient(135deg, #F68B1E 0%, #D4730A 100%);
+    border-radius: 12px;
+    padding: 20px 28px 16px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    box-shadow: 0 4px 16px #F68B1E44;
+}
+.jumia-header h1 {
+    margin: 0;
+    color: #FFFFFF;
+    font-size: 1.8rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+}
+.jumia-header p {
+    margin: 4px 0 0;
+    color: #FFE0B2;
+    font-size: 0.9rem;
+}
+.jumia-logo-dot {
+    width: 48px;
+    height: 48px;
+    background: #FFFFFF;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.6rem;
+    flex-shrink: 0;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+
+/* ── Tab bar ──────────────────────────────────────────────────────────────── */
+[data-testid="stTabs"] [role="tablist"] {
+    gap: 4px;
+    border-bottom: 2px solid #F68B1E;
+}
+[data-testid="stTabs"] button[role="tab"] {
+    background: #FFFFFF;
+    border: 1px solid #E0E0E0;
+    border-bottom: none;
+    border-radius: 8px 8px 0 0;
+    color: #6B6B6B;
+    font-weight: 600;
+    font-size: 0.88rem;
+    padding: 8px 18px;
+    transition: all 0.2s ease;
+}
+[data-testid="stTabs"] button[role="tab"]:hover {
+    background: #FFF4E6;
+    color: #F68B1E;
+}
+[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
+    background: #F68B1E;
+    color: #FFFFFF !important;
+    border-color: #F68B1E;
+    font-weight: 700;
+}
+
+/* ── Primary buttons ──────────────────────────────────────────────────────── */
+[data-testid="stButton"] button[kind="primary"],
+[data-testid="stBaseButton-primary"] {
+    background: linear-gradient(135deg, #F68B1E 0%, #D4730A 100%) !important;
+    color: #FFFFFF !important;
+    border: none !important;
+    border-radius: 8px !important;
+    font-weight: 700 !important;
+    font-size: 0.9rem !important;
+    padding: 10px 20px !important;
+    box-shadow: 0 3px 10px #F68B1E55 !important;
+    transition: all 0.2s ease !important;
+}
+[data-testid="stButton"] button[kind="primary"]:hover,
+[data-testid="stBaseButton-primary"]:hover {
+    box-shadow: 0 5px 18px #F68B1E88 !important;
+    transform: translateY(-1px);
+}
+
+/* Secondary / normal buttons */
+[data-testid="stButton"] button:not([kind="primary"]),
+[data-testid="stBaseButton-secondary"] {
+    background: #FFFFFF !important;
+    color: #F68B1E !important;
+    border: 1.5px solid #F68B1E !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    transition: all 0.2s ease !important;
+}
+[data-testid="stButton"] button:not([kind="primary"]):hover {
+    background: #FFF4E6 !important;
+}
+
+/* Download button */
+[data-testid="stDownloadButton"] button {
+    background: linear-gradient(135deg, #F68B1E 0%, #D4730A 100%) !important;
+    color: #FFFFFF !important;
+    border: none !important;
+    border-radius: 8px !important;
+    font-weight: 700 !important;
+    box-shadow: 0 3px 10px #F68B1E44 !important;
+}
+
+/* ── Metrics ──────────────────────────────────────────────────────────────── */
+[data-testid="stMetric"] {
+    background: #FFFFFF;
+    border: 1px solid #F0E0CC;
+    border-left: 4px solid #F68B1E;
+    border-radius: 10px;
+    padding: 14px 16px !important;
+    box-shadow: 0 2px 8px rgba(246,139,30,0.1);
+}
+[data-testid="stMetric"] [data-testid="stMetricValue"] {
+    color: #F68B1E;
+    font-weight: 800;
+    font-size: 1.6rem;
+}
+[data-testid="stMetric"] [data-testid="stMetricLabel"] {
+    color: #6B6B6B;
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+/* ── Cards / containers ───────────────────────────────────────────────────── */
+[data-testid="stExpander"] {
+    border: 1px solid #F0E0CC !important;
+    border-radius: 10px !important;
+    overflow: hidden;
+}
+[data-testid="stExpander"] summary {
+    background: #FFF4E6 !important;
+    color: #1A1A1A !important;
+    font-weight: 600;
+}
+
+/* ── Form inputs ──────────────────────────────────────────────────────────── */
+[data-testid="stTextInput"] input,
+[data-testid="stTextArea"] textarea {
+    border: 1.5px solid #E0E0E0 !important;
+    border-radius: 8px !important;
+    font-family: 'Nunito', sans-serif !important;
+    transition: border-color 0.2s;
+}
+[data-testid="stTextInput"] input:focus,
+[data-testid="stTextArea"] textarea:focus {
+    border-color: #F68B1E !important;
+    box-shadow: 0 0 0 3px #F68B1E22 !important;
+}
+
+/* ── Slider ───────────────────────────────────────────────────────────────── */
+[data-testid="stSlider"] [data-baseweb="slider"] [role="slider"] {
+    background: #F68B1E !important;
+    border-color: #F68B1E !important;
+}
+[data-testid="stSlider"] [data-baseweb="slider"] div[data-testid="stSlider"] {
+    background: #F68B1E !important;
+}
+
+/* ── Info / success / warning / error alerts ──────────────────────────────── */
+[data-testid="stAlert"][data-baseweb="notification"] {
+    border-radius: 8px;
+}
+.stSuccess { border-left: 4px solid #F68B1E !important; }
+.stInfo    { border-left: 4px solid #F68B1E !important; }
+
+/* ── Dataframe header row ─────────────────────────────────────────────────── */
+[data-testid="stDataFrame"] th {
+    background-color: #F68B1E !important;
+    color: #FFFFFF !important;
+    font-weight: 700 !important;
+}
+
+/* ── File uploader ────────────────────────────────────────────────────────── */
+[data-testid="stFileUploader"] {
+    border: 2px dashed #F68B1E !important;
+    border-radius: 10px !important;
+    background: #FFF4E688 !important;
+}
+[data-testid="stFileUploaderDropzone"] {
+    background: transparent !important;
+}
+
+/* ── Radio buttons ────────────────────────────────────────────────────────── */
+[data-testid="stRadio"] label[data-baseweb="radio"] div:first-child {
+    border-color: #F68B1E !important;
+}
+[data-testid="stRadio"] [aria-checked="true"] div:first-child {
+    background: #F68B1E !important;
+    border-color: #F68B1E !important;
+}
+
+/* ── Checkbox ─────────────────────────────────────────────────────────────── */
+[data-testid="stCheckbox"] input:checked + div {
+    background: #F68B1E !important;
+    border-color: #F68B1E !important;
+}
+
+/* ── Selectbox focus border ───────────────────────────────────────────────── */
+[data-baseweb="select"]:focus-within {
+    border-color: #F68B1E !important;
+    box-shadow: 0 0 0 3px #F68B1E22 !important;
+}
+
+/* ── Horizontal divider ───────────────────────────────────────────────────── */
+hr {
+    border-color: #F0E0CC !important;
+}
+
+/* ── Caption / small text ─────────────────────────────────────────────────── */
+[data-testid="stCaptionContainer"] {
+    color: #6B6B6B;
+    font-size: 0.8rem;
+}
+
+/* ── Subheader accent ─────────────────────────────────────────────────────── */
+h2, h3 {
+    color: #1A1A1A;
+    font-weight: 700;
+}
+h2::after {
+    content: '';
+    display: block;
+    width: 48px;
+    height: 3px;
+    background: #F68B1E;
+    border-radius: 2px;
+    margin-top: 4px;
+}
+
+/* ── Image borders ────────────────────────────────────────────────────────── */
+[data-testid="stImage"] img {
+    border-radius: 8px;
+    border: 1px solid #F0E0CC;
+}
+
+/* ── Progress bar ─────────────────────────────────────────────────────────── */
+[data-testid="stProgress"] div[role="progressbar"] > div {
+    background: linear-gradient(90deg, #F68B1E, #D4730A) !important;
+}
+
+/* ── Spinner ──────────────────────────────────────────────────────────────── */
+[data-testid="stSpinner"] svg {
+    color: #F68B1E !important;
+}
+</style>
+
+<div class="jumia-header">
+  <div class="jumia-logo-dot">🏷</div>
+  <div>
+    <h1>Jumia Refurbished Suite</h1>
+    <p>Analyze listings &nbsp;·&nbsp; Apply grade tags &nbsp;·&nbsp; Convert existing tags</p>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  CONSTANTS
@@ -1682,9 +2012,24 @@ with tab_convert:
 
 
 # ── Footer ────────────────────────────────────────────────────────────────────
-st.markdown("---")
-st.caption(
-    "Auto-crop trims whitespace  ·  "
-    "Margin-aware fit keeps product clear of tag borders  ·  "
-    "Pixel-scan strips old tags cleanly"
-)
+st.markdown("""
+<div style="
+    margin-top: 40px;
+    padding: 18px 24px;
+    background: linear-gradient(135deg, #1A1A1A 0%, #2D2D2D 100%);
+    border-radius: 10px;
+    border-top: 3px solid #F68B1E;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+">
+  <span style="color:#F68B1E; font-weight:800; font-size:0.95rem; font-family:'Nunito',sans-serif;">
+    Jumia Refurbished Suite
+  </span>
+  <span style="color:#999; font-size:0.78rem; font-family:'Nunito',sans-serif;">
+    Auto-crop &nbsp;·&nbsp; Margin-aware fit &nbsp;·&nbsp; Pixel-scan tag removal
+  </span>
+</div>
+""", unsafe_allow_html=True)
