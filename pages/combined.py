@@ -676,7 +676,7 @@ def get_driver(headless: bool = True, timeout: int = 20):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  JUMIA SKU → PRIMARY IMAGE  (with multi-country fallback)
+#  JUMIA SKU → PRIMARY IMAGE  (with multi-country parallel fallback)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _fetch_image_from_url_and_soup(driver, b_url: str) -> Image.Image | None:
@@ -724,11 +724,8 @@ def fetch_image_from_sku(
     Strategy
     --------
     1. Try ``primary_b_url`` (the currently active country) first.
-    2. If not found AND ``try_all_countries`` is True, iterate through all other
-       Jumia domains in order.
-    3. Return ``(image, found_country_key)`` — found_country_key is None if the
-       search failed entirely, or the DOMAIN_MAP key for the country where the
-       product was actually located.
+    2. If not found AND ``try_all_countries`` is True, use a ThreadPoolExecutor 
+       to search all other Jumia domains simultaneously. Return the first valid hit.
     """
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support.ui import WebDriverWait
@@ -774,15 +771,28 @@ def fetch_image_from_sku(
     if not try_all_countries:
         return None, None
 
-    # 2 — try remaining countries in order
+    # 2 — try remaining countries in PARALLEL
     primary_domain = primary_b_url.replace("https://www.", "")
+    remaining_urls = []
+    
     for domain_, country_key in DOMAIN_MAP.items():
         if DOMAIN_MAP[domain_] == primary_domain:
             continue
-        alt_b_url = f"https://www.{DOMAIN_MAP[domain_]}"
-        img = _try_single_country(alt_b_url)
-        if img is not None:
-            return img, domain_
+        remaining_urls.append((f"https://www.{DOMAIN_MAP[domain_]}", domain_))
+
+    if remaining_urls:
+        # Use ThreadPoolExecutor to check the remaining 4 countries at the same time
+        with ThreadPoolExecutor(max_workers=len(remaining_urls)) as executor:
+            futures = {executor.submit(_try_single_country, url): domain_ for url, domain_ in remaining_urls}
+            
+            for future in as_completed(futures):
+                domain_ = futures[future]
+                try:
+                    res_img = future.result()
+                    if res_img is not None:
+                        return res_img, domain_
+                except Exception:
+                    pass
 
     return None, None
 
@@ -1791,18 +1801,37 @@ with tab_analyze:
 
         st.markdown("---")
         st.subheader("Full Results")
+        st.caption("Select specific rows using the checkboxes on the left to download only those. If none are selected, all rows will be downloaded.")
 
         def _highlight(row):
-            return ["background-color:#fffacd"]*len(row) \
-                   if row.get("Brand")=="Renewed" else [""]*len(row)
+            return ["background-color:#fffacd"]*len(row) if row.get("Brand")=="Renewed" else [""]*len(row)
+            
         try:
-            st.dataframe(df.style.apply(_highlight, axis=1), use_container_width=True)
-        except:
+            # For Streamlit versions >= 1.35 that support interactive row selection
+            event = st.dataframe(
+                df.style.apply(_highlight, axis=1), 
+                use_container_width=True, 
+                on_select="rerun", 
+                selection_mode="multi-row",
+                key="interactive_df"
+            )
+            selected_indices = event.selection.rows
+        except Exception:
+            # Fallback for older environments
             st.dataframe(df, use_container_width=True)
+            selected_indices = []
+
+        if selected_indices:
+            download_df = df.iloc[selected_indices]
+            st.caption(f"Selected {len(selected_indices)} row(s) for download.")
+        else:
+            download_df = df
+            if 'event' in locals():
+                st.caption("No rows selected. Downloading all rows.")
 
         st.download_button(
             "Download CSV",
-            df.to_csv(index=False).encode("utf-8"),
+            download_df.to_csv(index=False).encode("utf-8"),
             f"analysis_{int(time.time())}.csv",
             "text/csv",
             icon=":material/download:",
