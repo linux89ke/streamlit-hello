@@ -24,7 +24,7 @@ st.set_page_config(
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  JUMIA BRAND THEME  (injected once, right after set_page_config)
+#  JUMIA BRAND THEME
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown("""
 <style>
@@ -318,113 +318,7 @@ def load_tag_image(grade: str) -> Image.Image | None:
     return Image.open(path).convert("RGBA")
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  LIGHTNING URL FETCHING & HYBRID PARALLEL SKU SEARCH
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _fetch_image_from_url_and_soup_fast(product_url: str) -> Image.Image | None:
-    """Lightning fast image extraction using requests and BeautifulSoup instead of Selenium."""
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
-    try:
-        r = requests.get(product_url, headers=headers, timeout=10)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "html.parser")
-        og = soup.find("meta", property="og:image")
-        image_url = og["content"] if (og and og.get("content")) else None
-        
-        if not image_url:
-            for img in soup.find_all("img", limit=20):
-                src = img.get("data-src") or img.get("src") or ""
-                if any(x in src for x in ["/product/", "/unsafe/", "jumia.is"]):
-                    if src.startswith("//"): src = "https:" + src
-                    elif src.startswith("/"):
-                        parsed = urlparse(product_url)
-                        base = f"{parsed.scheme}://{parsed.netloc}"
-                        src = base + src
-                    image_url = src
-                    break
-        if image_url:
-            img_r = requests.get(image_url, headers=headers, timeout=10)
-            img_r.raise_for_status()
-            return Image.open(BytesIO(img_r.content)).convert("RGBA")
-    except Exception:
-        pass
-    return None
-
-def _try_single_country_hybrid(b_url: str, sku: str) -> tuple[Image.Image | None, str]:
-    """Uses Selenium strictly to bypass Jumia's Search WAF, then fetches image fast via requests."""
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    from selenium.common.exceptions import TimeoutException
-    
-    search_url = f"{b_url}/catalog/?q={sku}"
-    driver = get_driver(headless=True, timeout=15)
-    if not driver: return None, b_url
-    
-    href = None
-    try:
-        driver.get(search_url)
-        try:
-            WebDriverWait(driver, 8).until(EC.presence_of_element_located((By.CSS_SELECTOR, "article.prd, h1")))
-        except TimeoutException:
-            return None, b_url
-            
-        if "There are no results" in driver.page_source or "No results found" in driver.page_source:
-            return None, b_url
-            
-        links = driver.find_elements(By.CSS_SELECTOR, "article.prd a.core")
-        if not links: links = driver.find_elements(By.CSS_SELECTOR, "a[href*='.html']")
-        if not links: return None, b_url
-            
-        href = links[0].get_attribute("href")
-    except Exception:
-        pass
-    finally:
-        try: driver.quit()
-        except: pass
-        
-    if href:
-        img = _fetch_image_from_url_and_soup_fast(href)
-        return img, b_url
-        
-    return None, b_url
-
-def fetch_image_from_sku(sku: str, primary_b_url: str, try_all_countries: bool = True) -> tuple[Image.Image | None, str | None]:
-    """Optimized parallel SKU search using Hybrid fetch to bypass Datadome bots."""
-    # 1. Try primary country first
-    img, _ = _try_single_country_hybrid(primary_b_url, sku)
-    if img is not None:
-        domain_ = primary_b_url.replace("https://www.", "")
-        found_key = _DOMAIN_TO_COUNTRY.get(domain_)
-        return img, found_key
-
-    if not try_all_countries:
-        return None, None
-
-    # 2. Parallel search all remaining countries (max_workers=2 to prevent heavy RAM usage)
-    remaining_urls = []
-    primary_domain = primary_b_url.replace("https://www.", "")
-    for domain_, country_key in DOMAIN_MAP.items():
-        if DOMAIN_MAP[domain_] == primary_domain: continue
-        remaining_urls.append(f"https://www.{DOMAIN_MAP[domain_]}")
-    
-    if remaining_urls:
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            futures = {executor.submit(_try_single_country_hybrid, url, sku): url for url in remaining_urls}
-            for future in as_completed(futures):
-                try:
-                    res_img, b_url = future.result()
-                    if res_img is not None:
-                        domain_ = b_url.replace("https://www.", "")
-                        found_key = _DOMAIN_TO_COUNTRY.get(domain_)
-                        return res_img, found_key
-                except Exception:
-                    pass
-                
-    return None, None
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  BROWSER DRIVER (Retained for the Analyze tab's deep scraping)
+#  BROWSER DRIVER
 # ══════════════════════════════════════════════════════════════════════════════
 @st.cache_resource
 def get_driver_path():
@@ -475,6 +369,91 @@ def get_driver(headless: bool = True, timeout: int = 20):
             driver.implicitly_wait(5)
         except Exception: pass
     return driver
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  PURE SELENIUM SKU & URL FETCHING (Bypasses Jumia Datadome Bot Detection)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _fetch_image_from_url_and_soup(driver, b_url: str) -> Image.Image | None:
+    """Given a driver already on a product page, extract & return the primary image."""
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    from selenium.common.exceptions import TimeoutException
+    try:
+        WebDriverWait(driver, 12).until(EC.presence_of_element_located((By.TAG_NAME, "h1")))
+    except TimeoutException:
+        return None
+    time.sleep(1)
+    soup = BeautifulSoup(driver.page_source, "html.parser")
+    og   = soup.find("meta", property="og:image")
+    if og and og.get("content"):
+        image_url = og["content"]
+    else:
+        image_url = None
+        for img in soup.find_all("img", limit=20):
+            src = img.get("data-src") or img.get("src") or ""
+            if any(x in src for x in ["/product/", "/unsafe/", "jumia.is"]):
+                if src.startswith("//"): src = "https:" + src
+                elif src.startswith("/"): src = b_url + src
+                image_url = src
+                break
+    if not image_url: return None
+    r = requests.get(image_url, headers={"User-Agent": "Mozilla/5.0", "Referer": b_url}, timeout=15)
+    r.raise_for_status()
+    return Image.open(BytesIO(r.content)).convert("RGBA")
+
+def fetch_image_from_sku(sku: str, primary_b_url: str, try_all_countries: bool = True) -> tuple[Image.Image | None, str | None]:
+    """Search Jumia for a SKU using pure Selenium sequentially to avoid Bot blocks."""
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    from selenium.common.exceptions import TimeoutException
+
+    def _try_single_country(b_url: str) -> Image.Image | None:
+        search_url = f"{b_url}/catalog/?q={sku}"
+        driver = get_driver(headless=True)
+        if not driver: return None
+        try:
+            driver.get(search_url)
+            try: WebDriverWait(driver, 12).until(EC.presence_of_element_located((By.CSS_SELECTOR, "article.prd, h1")))
+            except TimeoutException: return None
+            
+            if ("There are no results" in driver.page_source or "No results found" in driver.page_source):
+                return None
+                
+            links = driver.find_elements(By.CSS_SELECTOR, "article.prd a.core")
+            if not links: links = driver.find_elements(By.CSS_SELECTOR, "a[href*='.html']")
+            if not links: return None
+            
+            driver.get(links[0].get_attribute("href"))
+            return _fetch_image_from_url_and_soup(driver, b_url)
+        except Exception:
+            return None
+        finally:
+            try: driver.quit()
+            except: pass
+
+    # 1 — try active country
+    img = _try_single_country(primary_b_url)
+    if img is not None:
+        domain_ = primary_b_url.replace("https://www.", "")
+        found_key = _DOMAIN_TO_COUNTRY.get(domain_)
+        return img, found_key
+
+    if not try_all_countries: return None, None
+
+    # 2 — try remaining countries in order sequentially
+    primary_domain = primary_b_url.replace("https://www.", "")
+    for domain_, country_key in DOMAIN_MAP.items():
+        if DOMAIN_MAP[domain_] == primary_domain: continue
+        alt_b_url = f"https://www.{DOMAIN_MAP[domain_]}"
+        img = _try_single_country(alt_b_url)
+        if img is not None:
+            return img, domain_
+
+    return None, None
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  COUNTRY-MISMATCH DIALOG
@@ -1234,7 +1213,7 @@ with tab_single:
 
         else:
             sku_val = st.text_input("Product SKU:", placeholder="e.g. GE840EA6C62GANAFAMZ", key="s_sku")
-            st.caption(f"Searches **{base_url}** first, then all other Jumia countries instantly.")
+            st.caption(f"Searches **{base_url}** first, then all other Jumia countries sequentially.")
             if st.button("Search & Extract Image", icon=":material/search:", key="s_sku_search", type="primary"):
                 if sku_val.strip():
                     prog_holder = st.empty()
@@ -1496,23 +1475,51 @@ with tab_convert:
                 if st.button("Extract Image from Page", icon=":material/travel_explore:", key="cv_s_prod_load"):
                     if prod_url_cv.strip():
                         url_country = detect_country_from_url(prod_url_cv.strip())
-                        with st.spinner("Fetching image lightning fast..."):
-                            img = _fetch_image_from_url_and_soup_fast(prod_url_cv.strip())
-                            if img:
-                                trigger_mismatch_or_commit(
-                                    img=img, label=prod_url_cv.strip(), source="product_url", found_country=url_country,
-                                    active_country=region_choice, target_slot="cv_single"
-                                )
-                                if not st.session_state.get("mismatch_detected"):
-                                    st.success("Image extracted instantly.", icon=":material/bolt:")
-                                st.rerun()
-                            else:
-                                st.warning("Could not find an image on that page.", icon=":material/image_not_supported:")
+                        with st.spinner("Opening product page and extracting image…"):
+                            try:
+                                from selenium.webdriver.common.by import By as _By
+                                from selenium.webdriver.support.ui import WebDriverWait as _WDW
+                                from selenium.webdriver.support import expected_conditions as _EC
+                                drv = get_driver(headless=True)
+                                if drv is None:
+                                    st.error("Browser driver unavailable.", icon=":material/error:")
+                                else:
+                                    try:
+                                        drv.get(prod_url_cv.strip())
+                                        _WDW(drv, 12).until(_EC.presence_of_element_located((_By.TAG_NAME,"h1")))
+                                        time.sleep(1)
+                                        soup_ = BeautifulSoup(drv.page_source, "html.parser")
+                                        og_ = soup_.find("meta", property="og:image")
+                                        img_url_ = og_["content"] if (og_ and og_.get("content")) else None
+                                        if not img_url_:
+                                            for im_ in soup_.find_all("img", limit=20):
+                                                s_ = im_.get("data-src") or im_.get("src") or ""
+                                                if any(x in s_ for x in ["/product/","/unsafe/","jumia.is"]):
+                                                    if s_.startswith("//"): s_ = "https:" + s_
+                                                    elif s_.startswith("/"): s_ = base_url + s_
+                                                    img_url_ = s_
+                                                    break
+                                        if img_url_:
+                                            r_ = requests.get(img_url_, headers={"User-Agent":"Mozilla/5.0","Referer":base_url}, timeout=15)
+                                            r_.raise_for_status()
+                                            img = Image.open(BytesIO(r_.content)).convert("RGB")
+                                            trigger_mismatch_or_commit(
+                                                img=img, label=prod_url_cv.strip(), source="product_url", found_country=url_country,
+                                                active_country=region_choice, target_slot="cv_single"
+                                            )
+                                            if not st.session_state.get("mismatch_detected"): st.success("Image extracted from product page.", icon=":material/check_circle:")
+                                            st.rerun()
+                                        else:
+                                            st.warning("Could not find an image on that page.", icon=":material/image_not_supported:")
+                                    finally:
+                                        try: drv.quit()
+                                        except: pass
+                            except Exception as e: st.error(f"Error: {e}", icon=":material/error:")
                     else: st.warning("Please enter a product URL.", icon=":material/warning:")
 
             else:
                 sku_cv = st.text_input("Product SKU:", placeholder="e.g. GE840EA6C62GANAFAMZ", key="cv_s_sku")
-                st.caption(f"Searches **{base_url}** first, then all other Jumia countries instantly.")
+                st.caption(f"Searches **{base_url}** first, then all other Jumia countries sequentially.")
                 if st.button("Search & Extract Image", icon=":material/search:", key="cv_s_sku_search", type="primary"):
                     if sku_cv.strip():
                         prog_cv = st.empty()
