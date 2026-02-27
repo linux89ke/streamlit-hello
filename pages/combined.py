@@ -985,21 +985,43 @@ def detect_tag_boundaries(img: Image.Image):
     rgb = img.convert("RGB")
     w, h = rgb.size
 
-    def is_red(r, g, b):   return r > 150 and g < 80 and b < 80
-    def is_non_white(r, g, b): return not (r > 230 and g > 230 and b > 230)
+    def is_red(r, g, b):   
+        return r > 150 and g < 80 and b < 80
+    def is_non_white(r, g, b): 
+        return not (r > 230 and g > 230 and b > 230)
 
+    # 1. Detect Right Strip (scan right-to-left)
     strip_left = w - int(w * VERT_STRIP_RATIO)
-    for x in range(w - 1, int(w * 0.70), -1):
-        if any(is_red(*rgb.getpixel((x, y))) for y in range(h)):
+    found_strip_gap = False
+    for x in range(w - 1, int(w * 0.65), -1):
+        # Count red pixels in this column
+        red_count = sum(1 for y in range(h) if is_red(*rgb.getpixel((x, y))))
+        if red_count > h * 0.03: # At least 3% of the column must be red to count
             strip_left = x
         elif strip_left < w - 1:
+            # We found the edge of the strip and hit the white gap.
+            # Add a 2px buffer to clear anti-aliasing, then break.
+            strip_left += 2
+            found_strip_gap = True
             break
+            
+    if not found_strip_gap:
+        strip_left = w - int(w * VERT_STRIP_RATIO) # Fallback
 
+    # 2. Detect Bottom Banner (scan bottom-to-top)
     banner_top = h - int(h * BANNER_RATIO)
-    for y in range(int(h * 0.75), h):
-        if any(is_non_white(*rgb.getpixel((x, y))) for x in range(strip_left)):
-            banner_top = y
+    found_banner_gap = False
+    for y in range(h - 1, int(h * 0.65), -1):
+        # Count non-white pixels in this row (ignoring the right strip)
+        non_white_count = sum(1 for x in range(strip_left) if is_non_white(*rgb.getpixel((x, y))))
+        if non_white_count < strip_left * 0.02: 
+            # If the row is mostly white, we've found the gap between the banner and the product!
+            banner_top = y + 2
+            found_banner_gap = True
             break
+            
+    if not found_banner_gap:
+        banner_top = h - int(h * BANNER_RATIO) # Fallback
 
     return strip_left, banner_top
 
@@ -1007,19 +1029,24 @@ def detect_tag_boundaries(img: Image.Image):
 def strip_and_retag(tagged: Image.Image, new_tag: Image.Image) -> Image.Image:
     rgb = tagged.convert("RGB")
     w, h = rgb.size
+    
+    # 1. Detect boundaries intelligently without hitting the product
     strip_left, banner_top = detect_tag_boundaries(rgb)
     canvas = rgb.copy()
     draw   = ImageDraw.Draw(canvas)
-    draw.rectangle([strip_left, 0, w, h],       fill=(255, 255, 255))
-    draw.rectangle([0, banner_top, w, h],        fill=(255, 255, 255))
     
-    # Resize the new tag to fit the canvas exactly before pasting
+    # 2. White out ONLY the old tag areas
+    draw.rectangle([strip_left, 0, w, h], fill=(255, 255, 255))
+    draw.rectangle([0, banner_top, w, h], fill=(255, 255, 255))
+    
+    # 3. Resize the new tag to fit the canvas exactly before pasting
     resized_tag = new_tag.resize((w, h), Image.Resampling.LANCZOS)
     
     if resized_tag.mode == "RGBA":
         canvas.paste(resized_tag, (0, 0), resized_tag)
     else:
         canvas.paste(resized_tag, (0, 0))
+        
     return canvas
 
 
