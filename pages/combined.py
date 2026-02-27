@@ -318,12 +318,12 @@ def load_tag_image(grade: str) -> Image.Image | None:
     return Image.open(path).convert("RGBA")
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  LIGHTNING URL FETCHING (NO SELENIUM) & PARALLEL SKU SEARCH
+#  LIGHTNING URL FETCHING & HYBRID PARALLEL SKU SEARCH
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _fetch_image_from_url_and_soup_fast(product_url: str) -> Image.Image | None:
     """Lightning fast image extraction using requests and BeautifulSoup instead of Selenium."""
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
     try:
         r = requests.get(product_url, headers=headers, timeout=10)
         r.raise_for_status()
@@ -350,37 +350,49 @@ def _fetch_image_from_url_and_soup_fast(product_url: str) -> Image.Image | None:
         pass
     return None
 
-def _try_single_country_fast(b_url: str, sku: str) -> tuple[Image.Image | None, str]:
-    """Lightning fast single country search using requests."""
+def _try_single_country_hybrid(b_url: str, sku: str) -> tuple[Image.Image | None, str]:
+    """Uses Selenium strictly to bypass Jumia's Search WAF, then fetches image fast via requests."""
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    from selenium.common.exceptions import TimeoutException
+    
     search_url = f"{b_url}/catalog/?q={sku}"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    driver = get_driver(headless=True, timeout=15)
+    if not driver: return None, b_url
+    
+    href = None
     try:
-        r = requests.get(search_url, headers=headers, timeout=10)
-        if r.status_code != 200: return None, b_url
-        
-        soup = BeautifulSoup(r.text, "html.parser")
-        if "There are no results" in r.text or "No results found" in r.text:
+        driver.get(search_url)
+        try:
+            WebDriverWait(driver, 8).until(EC.presence_of_element_located((By.CSS_SELECTOR, "article.prd, h1")))
+        except TimeoutException:
             return None, b_url
             
-        links = soup.select("article.prd a.core")
-        if not links:
-            links = soup.select("a[href*='.html']")
-        if not links:
+        if "There are no results" in driver.page_source or "No results found" in driver.page_source:
             return None, b_url
             
-        href = links[0].get("href")
-        if href.startswith("/"):
-            href = b_url + href
+        links = driver.find_elements(By.CSS_SELECTOR, "article.prd a.core")
+        if not links: links = driver.find_elements(By.CSS_SELECTOR, "a[href*='.html']")
+        if not links: return None, b_url
+            
+        href = links[0].get_attribute("href")
+    except Exception:
+        pass
+    finally:
+        try: driver.quit()
+        except: pass
         
+    if href:
         img = _fetch_image_from_url_and_soup_fast(href)
         return img, b_url
-    except Exception:
-        return None, b_url
+        
+    return None, b_url
 
 def fetch_image_from_sku(sku: str, primary_b_url: str, try_all_countries: bool = True) -> tuple[Image.Image | None, str | None]:
-    """Optimized parallel SKU search across Jumia domains without Selenium."""
+    """Optimized parallel SKU search using Hybrid fetch to bypass Datadome bots."""
     # 1. Try primary country first
-    img, _ = _try_single_country_fast(primary_b_url, sku)
+    img, _ = _try_single_country_hybrid(primary_b_url, sku)
     if img is not None:
         domain_ = primary_b_url.replace("https://www.", "")
         found_key = _DOMAIN_TO_COUNTRY.get(domain_)
@@ -389,7 +401,7 @@ def fetch_image_from_sku(sku: str, primary_b_url: str, try_all_countries: bool =
     if not try_all_countries:
         return None, None
 
-    # 2. Parallel search all remaining countries
+    # 2. Parallel search all remaining countries (max_workers=2 to prevent heavy RAM usage)
     remaining_urls = []
     primary_domain = primary_b_url.replace("https://www.", "")
     for domain_, country_key in DOMAIN_MAP.items():
@@ -397,8 +409,8 @@ def fetch_image_from_sku(sku: str, primary_b_url: str, try_all_countries: bool =
         remaining_urls.append(f"https://www.{DOMAIN_MAP[domain_]}")
     
     if remaining_urls:
-        with ThreadPoolExecutor(max_workers=len(remaining_urls)) as executor:
-            futures = {executor.submit(_try_single_country_fast, url, sku): url for url in remaining_urls}
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = {executor.submit(_try_single_country_hybrid, url, sku): url for url in remaining_urls}
             for future in as_completed(futures):
                 try:
                     res_img, b_url = future.result()
@@ -411,9 +423,8 @@ def fetch_image_from_sku(sku: str, primary_b_url: str, try_all_countries: bool =
                 
     return None, None
 
-
 # ══════════════════════════════════════════════════════════════════════════════
-#  BROWSER DRIVER (Retained ONLY for the Analyze tab's deep scraping)
+#  BROWSER DRIVER (Retained for the Analyze tab's deep scraping)
 # ══════════════════════════════════════════════════════════════════════════════
 @st.cache_resource
 def get_driver_path():
@@ -466,7 +477,7 @@ def get_driver(headless: bool = True, timeout: int = 20):
     return driver
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  COUNTRY-MISMATCH DIALOG (Retained per user request)
+#  COUNTRY-MISMATCH DIALOG
 # ══════════════════════════════════════════════════════════════════════════════
 @st.dialog("Country Mismatch Detected")
 def show_country_mismatch_dialog(active_country: str, found_country: str, context: str):
@@ -1143,7 +1154,6 @@ with tab_analyze:
             return ["background-color:#fffacd"]*len(row) if row.get("Brand")=="Renewed" else [""]*len(row)
             
         try:
-            # For Streamlit versions >= 1.35 that support interactive row selection
             event = st.dataframe(
                 df.style.apply(_highlight, axis=1), 
                 use_container_width=True, 
@@ -1153,7 +1163,6 @@ with tab_analyze:
             )
             selected_indices = event.selection.rows
         except Exception:
-            # Fallback for older environments
             st.dataframe(df, use_container_width=True)
             selected_indices = []
 
@@ -1173,7 +1182,6 @@ with tab_analyze:
             icon=":material/download:",
             key="a_dl"
         )
-
 
 # ┌─────────────────────────────────────────────────────────────────────────────
 # │  TAB 2 — TAG: SINGLE IMAGE
