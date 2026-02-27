@@ -26,8 +26,21 @@ st.title(":material/sync: Refurbished Product Data Extractor")
 # --- SIDEBAR ---
 with st.sidebar:
     st.header(":material/settings: Settings")
-    region_choice = st.selectbox("Select Region:", ("Region 1 (KE)", "Region 2 (UG)"))
-    domain = "jumia.co.ke" if "KE" in region_choice else "jumia.ug"
+    region_choice = st.selectbox("Select Region:", (
+        "Kenya (KE)",
+        "Uganda (UG)",
+        "Nigeria (NG)",
+        "Morocco (MA)",
+        "Ghana (GH)"
+    ))
+    domain_map = {
+        "Kenya (KE)":   "jumia.co.ke",
+        "Uganda (UG)":  "jumia.ug",
+        "Nigeria (NG)": "jumia.com.ng",
+        "Morocco (MA)": "jumia.ma",
+        "Ghana (GH)":   "jumia.com.gh",
+    }
+    domain = domain_map[region_choice]
     st.markdown("---")
     show_browser = st.checkbox("Show Browser (Debug Mode)", value=False)
     max_workers = st.slider("Parallel Workers:", 1, 3, 2, help="More workers = faster but may cause timeouts")
