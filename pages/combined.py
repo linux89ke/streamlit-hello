@@ -988,40 +988,64 @@ def detect_tag_boundaries(img: Image.Image):
     def is_red(r, g, b):   
         return r > 150 and g < 80 and b < 80
     def is_non_white(r, g, b): 
-        return not (r > 230 and g > 230 and b > 230)
+        # Tighter threshold to prevent anti-aliasing edges from looking "white"
+        return not (r > 235 and g > 235 and b > 235)
 
     # 1. Detect Right Strip (scan right-to-left)
     strip_left = w - int(w * VERT_STRIP_RATIO)
     found_strip_gap = False
+    consecutive_white_cols = 0
+    streak_start_x = w - 1
+
     for x in range(w - 1, int(w * 0.65), -1):
-        # Count red pixels in this column
         red_count = sum(1 for y in range(h) if is_red(*rgb.getpixel((x, y))))
-        if red_count > h * 0.03: # At least 3% of the column must be red to count
-            strip_left = x
-        elif strip_left < w - 1:
-            # We found the edge of the strip and hit the white gap.
-            # Add a 2px buffer to clear anti-aliasing, then break.
-            strip_left += 2
-            found_strip_gap = True
-            break
-            
+        if red_count > h * 0.02: # At least 2% red
+            consecutive_white_cols = 0
+        else:
+            if consecutive_white_cols == 0:
+                streak_start_x = x
+            consecutive_white_cols += 1
+            if consecutive_white_cols >= int(w * 0.015):
+                # Found a solid white gap. 
+                # Set strip_left slightly to the left of the gap's start to ensure complete wipe
+                strip_left = streak_start_x - 2
+                found_strip_gap = True
+                break
+                
     if not found_strip_gap:
-        strip_left = w - int(w * VERT_STRIP_RATIO) # Fallback
+        strip_left = w - int(w * VERT_STRIP_RATIO)
 
     # 2. Detect Bottom Banner (scan bottom-to-top)
     banner_top = h - int(h * BANNER_RATIO)
     found_banner_gap = False
-    for y in range(h - 1, int(h * 0.65), -1):
+    consecutive_white_rows = 0
+    streak_start_y = h - 1
+
+    for y in range(h - 1, int(h * 0.60), -1):
         # Count non-white pixels in this row (ignoring the right strip)
         non_white_count = sum(1 for x in range(strip_left) if is_non_white(*rgb.getpixel((x, y))))
-        if non_white_count < strip_left * 0.02: 
-            # If the row is mostly white, we've found the gap between the banner and the product!
-            banner_top = y + 2
-            found_banner_gap = True
-            break
+        
+        # Use max(5, 1% of width) as threshold to tolerate minor JPEG artifacts
+        # This prevents the tapered tip of the round yellow badge from being treated as "white"
+        threshold = max(5, int(strip_left * 0.01))
+        
+        if non_white_count <= threshold:
+            if consecutive_white_rows == 0:
+                streak_start_y = y
+            consecutive_white_rows += 1
+            
+            # We need a solid block of white rows (e.g. 1.5% of image height, ~15px) 
+            # to guarantee we have totally cleared the badge and hit the actual empty gap
+            if consecutive_white_rows >= int(h * 0.015):
+                # Set banner_top slightly above the gap's start (lower Y) to ensure complete wipe
+                banner_top = streak_start_y - 2
+                found_banner_gap = True
+                break
+        else:
+            consecutive_white_rows = 0
             
     if not found_banner_gap:
-        banner_top = h - int(h * BANNER_RATIO) # Fallback
+        banner_top = h - int(h * BANNER_RATIO)
 
     return strip_left, banner_top
 
@@ -1033,15 +1057,14 @@ def strip_and_retag(tagged: Image.Image, new_tag: Image.Image) -> Image.Image:
     # 1. Detect boundaries intelligently without hitting the product
     strip_left, banner_top = detect_tag_boundaries(rgb)
     
-    # FIX: Clamp boundaries to ensure they don't exceed image dimensions 
-    # to prevent PIL ValueErrors (x0 > x1 or y0 > y1)
-    strip_left = min(strip_left, w)
-    banner_top = min(banner_top, h)
+    # FIX: Clamp boundaries safely to prevent PIL ValueErrors
+    strip_left = max(0, min(strip_left, w))
+    banner_top = max(0, min(banner_top, h))
     
     canvas = rgb.copy()
     draw   = ImageDraw.Draw(canvas)
     
-    # 2. White out ONLY the old tag areas (if they exist)
+    # 2. White out ONLY the old tag areas
     if strip_left < w:
         draw.rectangle([strip_left, 0, w, h], fill=(255, 255, 255))
     if banner_top < h:
