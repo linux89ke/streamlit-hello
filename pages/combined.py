@@ -77,11 +77,32 @@ html, body, [class*="css"] {
     padding-bottom: 4px;
     margin-bottom: 8px;
 }
-/* Sidebar selectbox / slider track colour */
-[data-testid="stSidebar"] [data-baseweb="select"] {
+/* Sidebar selectbox container + border */
+[data-testid="stSidebar"] [data-baseweb="select"] > div:first-child {
     background-color: #3A3A3A !important;
     border-color: #F68B1E !important;
+    border-radius: 6px !important;
 }
+/* Selected value text — must be light on the dark sidebar background */
+[data-testid="stSidebar"] [data-baseweb="select"] [data-testid="stSelectboxValue"],
+[data-testid="stSidebar"] [data-baseweb="select"] span,
+[data-testid="stSidebar"] [data-baseweb="select"] div {
+    color: #FFFFFF !important;
+}
+/* Dropdown list (rendered in a portal outside sidebar) */
+[data-baseweb="popover"] [data-baseweb="menu"] {
+    background-color: #2D2D2D !important;
+}
+[data-baseweb="popover"] [role="option"] {
+    background-color: #2D2D2D !important;
+    color: #F5F5F5 !important;
+}
+[data-baseweb="popover"] [role="option"]:hover,
+[data-baseweb="popover"] [aria-selected="true"] {
+    background-color: #F68B1E !important;
+    color: #FFFFFF !important;
+}
+/* Sidebar markdown paragraphs */
 [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
     color: #AAAAAA !important;
     font-size: 0.8rem;
@@ -387,18 +408,59 @@ _defaults = {
     "scraped_results": [],
     "failed_items":    [],
     # Single-image tagging — store as raw bytes so PIL can reload after rerun
-    "single_img_bytes":  None,   # bytes of the loaded product image
-    "single_img_label":  "",     # display label (filename / URL / SKU)
-    "single_img_source": None,   # "upload" | "url" | "sku"
-    "single_scale":      100,    # % size slider
+    "single_img_bytes":  None,
+    "single_img_label":  "",
+    "single_img_source": None,
+    "single_scale":      100,
+    # Convert-tag tab — persisted image bytes
+    "cv_img_bytes":  None,
+    "cv_img_label":  "",
+    "cv_img_source": None,
     # Bulk tagging — persisted SKU results
-    "bulk_sku_results":  [],     # list of {"bytes": ..., "name": ...}
+    "bulk_sku_results":  [],
+    # Convert bulk — persisted SKU results
+    "cv_bulk_sku_results": [],
     # Shared
-    "individual_scales": {},
+    "individual_scales":   {},
+    # Geo — auto-detected country key (e.g. "Kenya (KE)")
+    "geo_country": None,
 }
 for k, v in _defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  GEO-DETECTION  — resolve user's country once per session
+# ══════════════════════════════════════════════════════════════════════════════
+# Maps ip-api.com country codes → DOMAIN_MAP keys
+_COUNTRY_CODE_MAP = {
+    "KE": "Kenya (KE)",
+    "UG": "Uganda (UG)",
+    "NG": "Nigeria (NG)",
+    "MA": "Morocco (MA)",
+    "GH": "Ghana (GH)",
+}
+
+def _detect_country() -> str | None:
+    """Return a DOMAIN_MAP key for the user's IP location, or None."""
+    try:
+        r = requests.get("https://ipapi.co/json/", timeout=4)
+        code = r.json().get("country_code","")
+        return _COUNTRY_CODE_MAP.get(code)
+    except Exception:
+        return None
+
+if st.session_state["geo_country"] is None:
+    st.session_state["geo_country"] = _detect_country()
+
+_geo_default = st.session_state["geo_country"]
+_country_list = list(DOMAIN_MAP.keys())
+_default_idx  = (
+    _country_list.index(_geo_default)
+    if _geo_default and _geo_default in _country_list
+    else 0
+)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -425,17 +487,52 @@ def image_to_jpeg_bytes(img: Image.Image, quality: int = 95) -> bytes:
 # ══════════════════════════════════════════════════════════════════════════════
 with st.sidebar:
     st.header("Region")
+
+    # Geo-detected indicator (shown above the selector)
+    if _geo_default:
+        st.markdown(
+            f"""<div style="background:#F68B1E22;border:1px solid #F68B1E55;
+            border-radius:6px;padding:6px 10px;margin-bottom:8px;font-size:0.78rem;
+            color:#F68B1E!important;">
+            📍 Auto-detected: <strong style="color:#F68B1E">{_geo_default}</strong>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+
     region_choice = st.selectbox(
         "Select Country:",
-        list(DOMAIN_MAP.keys()),
+        _country_list,
+        index=_default_idx,
+        key="region_select",
         help="Used for product analysis and all SKU image lookups"
     )
     domain   = DOMAIN_MAP[region_choice]
     base_url = f"https://www.{domain}"
 
+    # Active country status pill
+    st.markdown(
+        f"""<div style="background:linear-gradient(135deg,#F68B1E,#D4730A);
+        border-radius:20px;padding:5px 12px;text-align:center;margin:4px 0 8px;
+        font-size:0.8rem;font-weight:700;color:#fff!important;letter-spacing:0.03em;">
+        Active: {region_choice}
+        </div>""",
+        unsafe_allow_html=True,
+    )
+
     st.markdown("---")
     st.header("Tag Settings")
-    tag_type = st.selectbox("Refurbished Grade:", list(TAG_FILES.keys()))
+    tag_type = st.selectbox("Refurbished Grade:", list(TAG_FILES.keys()),
+                             key="tag_select")
+
+    # Active grade pill
+    st.markdown(
+        f"""<div style="background:#2D2D2D;border:1px solid #F68B1E;
+        border-radius:20px;padding:5px 12px;text-align:center;margin:4px 0 8px;
+        font-size:0.8rem;font-weight:700;color:#F68B1E!important;">
+        Grade: {tag_type}
+        </div>""",
+        unsafe_allow_html=True,
+    )
 
     st.markdown("---")
     st.header("Analyzer Settings")
@@ -1867,149 +1964,328 @@ with tab_bulk:
                 icon=":material/image:")
 
 
+
+
 # ┌─────────────────────────────────────────────────────────────────────────────
 # │  TAB 4 — CONVERT TAG
 # └─────────────────────────────────────────────────────────────────────────────
 with tab_convert:
-    st.subheader(f"Convert Tag  →  {tag_type}")
+    st.subheader(f"Convert Tag  →  {tag_type}  ·  {region_choice}")
     st.caption(
-        "Upload images that already have a refurbished tag applied. "
-        "The old tag will be detected automatically via pixel scanning "
-        "and replaced with the grade selected in the sidebar."
+        "Load an already-tagged image from any source. "
+        "The old tag is detected automatically via pixel scanning and "
+        "replaced with the grade selected in the sidebar."
     )
 
-    conv_mode = st.radio(
-        "Input method:",
+    conv_qty = st.radio(
+        "Processing mode:",
         ["Single image", "Multiple images"],
-        horizontal=True, key="cv_mode"
+        horizontal=True, key="cv_qty"
     )
 
-    # ── Single ────────────────────────────────────────────────────────────────
-    if conv_mode == "Single image":
-        c1, c2 = st.columns([1,1])
-        with c1:
-            st.markdown("#### Upload tagged image")
-            cf = st.file_uploader(
-                "Choose a tagged image:",
-                type=["png","jpg","jpeg","webp"],
-                key="cv_single"
+    # ════════════════════════════════════════════════════════════════════════
+    #  SINGLE IMAGE
+    # ════════════════════════════════════════════════════════════════════════
+    if conv_qty == "Single image":
+        col_src, col_out = st.columns([1, 1])
+
+        with col_src:
+            st.markdown("#### Image Source")
+            cv_method = st.radio(
+                "Source:",
+                ["Upload from device",
+                 "Load from Image URL",
+                 "Load from Product URL",
+                 "Load from SKU"],
+                horizontal=False, key="cv_src_method"
             )
-        with c2:
+
+            # Clear stored image when source method switches
+            if st.session_state.get("cv_src_prev") != cv_method:
+                st.session_state["cv_img_bytes"]  = None
+                st.session_state["cv_img_label"]  = ""
+                st.session_state["cv_img_source"] = None
+                st.session_state["cv_src_prev"]   = cv_method
+
+            # ── Upload ────────────────────────────────────────────────────
+            if cv_method == "Upload from device":
+                cf = st.file_uploader(
+                    "Choose a tagged image:",
+                    type=["png","jpg","jpeg","webp"],
+                    key="cv_s_upload"
+                )
+                if cf is not None:
+                    fhash = hashlib.md5(cf.getvalue()).hexdigest()
+                    if st.session_state["cv_img_label"] != fhash:
+                        img = Image.open(cf).convert("RGB")
+                        st.session_state["cv_img_bytes"]  = pil_to_bytes(img)
+                        st.session_state["cv_img_label"]  = fhash
+                        st.session_state["cv_img_source"] = "upload"
+
+            # ── Image URL ─────────────────────────────────────────────────
+            elif cv_method == "Load from Image URL":
+                img_url_cv = st.text_input(
+                    "Direct image URL:",
+                    placeholder="https://example.com/product.jpg",
+                    key="cv_s_img_url"
+                )
+                if st.button("Load Image", icon=":material/download:", key="cv_s_img_load"):
+                    if img_url_cv.strip():
+                        with st.spinner("Fetching image…"):
+                            try:
+                                r = requests.get(img_url_cv.strip(), timeout=15)
+                                r.raise_for_status()
+                                img = Image.open(BytesIO(r.content)).convert("RGB")
+                                st.session_state["cv_img_bytes"]  = pil_to_bytes(img)
+                                st.session_state["cv_img_label"]  = img_url_cv.strip()
+                                st.session_state["cv_img_source"] = "url"
+                                st.success("Image loaded.", icon=":material/check_circle:")
+                            except Exception as e:
+                                st.error(f"Could not load image: {e}", icon=":material/error:")
+                    else:
+                        st.warning("Please enter a URL.", icon=":material/warning:")
+
+            # ── Product page URL ──────────────────────────────────────────
+            elif cv_method == "Load from Product URL":
+                prod_url_cv = st.text_input(
+                    "Jumia product page URL:",
+                    placeholder=f"https://www.{domain}/some-product.html",
+                    key="cv_s_prod_url"
+                )
+                if st.button("Extract Image from Page",
+                              icon=":material/travel_explore:", key="cv_s_prod_load"):
+                    if prod_url_cv.strip():
+                        with st.spinner("Opening product page and extracting image…"):
+                            try:
+                                from selenium.webdriver.common.by import By as _By
+                                from selenium.webdriver.support.ui import WebDriverWait as _WDW
+                                from selenium.webdriver.support import expected_conditions as _EC
+                                drv = get_driver(headless=True)
+                                if drv is None:
+                                    st.error("Browser driver unavailable.", icon=":material/error:")
+                                else:
+                                    try:
+                                        drv.get(prod_url_cv.strip())
+                                        _WDW(drv, 12).until(
+                                            _EC.presence_of_element_located((_By.TAG_NAME,"h1")))
+                                        time.sleep(1)
+                                        soup_ = BeautifulSoup(drv.page_source, "html.parser")
+                                        og_ = soup_.find("meta", property="og:image")
+                                        img_url_ = og_["content"] if (og_ and og_.get("content")) else None
+                                        if not img_url_:
+                                            for im_ in soup_.find_all("img", limit=20):
+                                                s_ = im_.get("data-src") or im_.get("src") or ""
+                                                if any(x in s_ for x in ["/product/","/unsafe/","jumia.is"]):
+                                                    if s_.startswith("//"): s_ = "https:" + s_
+                                                    elif s_.startswith("/"): s_ = base_url + s_
+                                                    img_url_ = s_
+                                                    break
+                                        if img_url_:
+                                            r_ = requests.get(img_url_,
+                                                headers={"User-Agent":"Mozilla/5.0","Referer":base_url},
+                                                timeout=15)
+                                            r_.raise_for_status()
+                                            img = Image.open(BytesIO(r_.content)).convert("RGB")
+                                            st.session_state["cv_img_bytes"]  = pil_to_bytes(img)
+                                            st.session_state["cv_img_label"]  = prod_url_cv.strip()
+                                            st.session_state["cv_img_source"] = "product_url"
+                                            st.success("Image extracted from product page.",
+                                                       icon=":material/check_circle:")
+                                        else:
+                                            st.warning("Could not find an image on that page.",
+                                                       icon=":material/image_not_supported:")
+                                    finally:
+                                        try: drv.quit()
+                                        except: pass
+                            except Exception as e:
+                                st.error(f"Error: {e}", icon=":material/error:")
+                    else:
+                        st.warning("Please enter a product URL.", icon=":material/warning:")
+
+            # ── SKU ───────────────────────────────────────────────────────
+            else:
+                sku_cv = st.text_input(
+                    "Product SKU:",
+                    placeholder="e.g. GE840EA6C62GANAFAMZ",
+                    key="cv_s_sku"
+                )
+                st.caption(f"Will search on **{base_url}**")
+                if st.button("Search & Extract Image",
+                              icon=":material/search:", key="cv_s_sku_search",
+                              type="primary"):
+                    if sku_cv.strip():
+                        with st.spinner(f"Searching {domain} for **{sku_cv.strip()}**…"):
+                            img = fetch_image_from_sku(sku_cv.strip(), base_url)
+                            if img is not None:
+                                st.session_state["cv_img_bytes"]  = pil_to_bytes(img.convert("RGB"))
+                                st.session_state["cv_img_label"]  = sku_cv.strip()
+                                st.session_state["cv_img_source"] = "sku"
+                                st.success(f"Image loaded for SKU **{sku_cv.strip()}**",
+                                           icon=":material/check_circle:")
+                    else:
+                        st.warning("Please enter a SKU.", icon=":material/warning:")
+
+            # Loaded indicator
+            if st.session_state["cv_img_bytes"] is not None:
+                src_icons = {
+                    "upload":      ":material/upload:",
+                    "url":         ":material/link:",
+                    "product_url": ":material/travel_explore:",
+                    "sku":         ":material/qr_code:",
+                }
+                st.info(f"Loaded: {st.session_state['cv_img_label']}",
+                        icon=src_icons.get(st.session_state["cv_img_source"],":material/image:"))
+
+        # ── Result column ─────────────────────────────────────────────────
+        with col_out:
             st.markdown("#### Result")
-            if cf is not None:
+            if st.session_state["cv_img_bytes"] is not None:
                 tag_img = load_tag_image(tag_type)
                 if tag_img is not None:
-                    tagged  = Image.open(cf).convert("RGB")
-                    result  = strip_and_retag(tagged, tag_img)
-                    fname   = cf.name.rsplit(".",1)[0]
-
+                    tagged_cv = bytes_to_pil(st.session_state["cv_img_bytes"]).convert("RGB")
+                    result_cv = strip_and_retag(tagged_cv, tag_img)
+                    fname_cv  = re.sub(r"[^\w\s-]","",
+                                       st.session_state["cv_img_label"]).strip()[:40] or "converted"
                     bc, ac = st.columns(2)
-                    bc.image(tagged, caption="Before (old tag)",
-                             use_container_width=True)
-                    ac.image(result, caption=f"After → {tag_type}",
-                             use_container_width=True)
-
+                    bc.image(tagged_cv, caption="Before (old tag)", use_container_width=True)
+                    ac.image(result_cv, caption=f"After → {tag_type}", use_container_width=True)
                     st.markdown("---")
                     st.download_button(
                         f"Download as {tag_type} (JPEG)",
-                        image_to_jpeg_bytes(result),
-                        f"{fname}_{tag_type.lower().replace(' ','_')}.jpg",
+                        image_to_jpeg_bytes(result_cv),
+                        f"{fname_cv}_{tag_type.lower().replace(' ','_')}.jpg",
                         "image/jpeg",
                         use_container_width=True,
                         icon=":material/download:",
-                        key="cv_single_dl"
+                        key="cv_s_dl"
                     )
             else:
-                st.info("Upload a tagged image to see the conversion here.",
+                st.info("Load an image using one of the source options on the left.",
                         icon=":material/swap_horiz:")
 
-    # ── Multiple ──────────────────────────────────────────────────────────────
+    # ════════════════════════════════════════════════════════════════════════
+    #  MULTIPLE IMAGES
+    # ════════════════════════════════════════════════════════════════════════
     else:
-        st.markdown("#### Upload tagged images")
-        conv_files = st.file_uploader(
-            "Choose tagged images:",
-            type=["png","jpg","jpeg","webp"],
-            accept_multiple_files=True,
-            key="cv_bulk"
+        st.markdown("#### Image Sources")
+        cv_bulk_method = st.radio(
+            "Input method:",
+            ["Upload multiple images", "Enter Image URLs", "Enter SKUs"],
+            horizontal=True, key="cv_bulk_method"
         )
-        if conv_files:
-            images_to_convert: list[tuple] = []
-            for f in conv_files:
-                try:
-                    images_to_convert.append(
-                        (Image.open(f).convert("RGB"), f.name.rsplit(".",1)[0]))
-                except Exception as e:
-                    st.warning(f"Could not load {f.name}: {e}",
-                               icon=":material/warning:")
+        cv_images: list[dict] = []
 
-            if images_to_convert:
-                st.info(f"{len(images_to_convert)} files loaded",
-                        icon=":material/photo_library:")
-                st.markdown("**Originals (with old tags):**")
-                for rs in range(0, len(images_to_convert), 4):
-                    cols_ = st.columns(4)
-                    for ci, (img_, name_) in enumerate(
-                            images_to_convert[rs:rs+4]):
-                        with cols_[ci]:
-                            st.image(img_, caption=name_,
-                                     use_container_width=True)
-
-                st.markdown("---")
-                if st.button(f"Convert All to {tag_type}",
-                              icon=":material/swap_horiz:",
-                              use_container_width=True,
-                              key="cv_bulk_btn",
-                              type="primary"):
-                    tag_img = load_tag_image(tag_type)
-                    if tag_img is not None:
-                        prog      = st.progress(0)
-                        converted = []
-                        for i, (tagged, name_) in enumerate(images_to_convert):
-                            try:
-                                converted.append(
-                                    (strip_and_retag(tagged, tag_img), name_))
-                            except Exception as e:
-                                st.warning(f"Error on {name_}: {e}",
-                                           icon=":material/warning:")
-                            prog.progress((i+1)/len(images_to_convert))
-
-                        if converted:
-                            st.success(
-                                f"{len(converted)} images converted to {tag_type}.",
-                                icon=":material/check_circle:")
-                            zb = BytesIO()
-                            with zipfile.ZipFile(zb,"w",zipfile.ZIP_DEFLATED) as zf:
-                                for img_, name_ in converted:
-                                    zf.writestr(
-                                        f"{name_}_{tag_type.lower().replace(' ','_')}.jpg",
-                                        image_to_jpeg_bytes(img_))
-                            zb.seek(0)
-                            st.download_button(
-                                f"Download All {len(converted)} Converted Images (ZIP)",
-                                zb,
-                                f"converted_{tag_type.lower().replace(' ','_')}.zip",
-                                "application/zip",
-                                use_container_width=True,
-                                icon=":material/download:",
-                                key="cv_bulk_dl"
-                            )
-                            st.markdown("### Preview")
-                            pcols = st.columns(4)
-                            for i, (img_, name_) in enumerate(converted[:8]):
-                                with pcols[i%4]:
-                                    st.image(img_, caption=name_,
-                                             use_container_width=True)
-                            if len(converted) > 8:
-                                st.caption(f"Showing 8 of {len(converted)}")
-                        else:
-                            st.error("No images were successfully converted.",
-                                     icon=":material/error:")
-        else:
-            st.info(
-                "Upload tagged images above to get started.",
-                icon=":material/image:"
+        if cv_bulk_method == "Upload multiple images":
+            conv_files = st.file_uploader(
+                "Choose tagged images:",
+                type=["png","jpg","jpeg","webp"],
+                accept_multiple_files=True, key="cv_b_upload"
             )
+            if conv_files:
+                st.info(f"{len(conv_files)} files uploaded", icon=":material/photo_library:")
+                for f in conv_files:
+                    try:
+                        img = Image.open(f).convert("RGB")
+                        cv_images.append({"bytes": pil_to_bytes(img), "name": f.name.rsplit(".",1)[0]})
+                    except Exception as e:
+                        st.warning(f"Could not load {f.name}: {e}", icon=":material/warning:")
 
+        elif cv_bulk_method == "Enter Image URLs":
+            raw_cv_urls = st.text_area(
+                "Image URLs (one per line):", height=150,
+                placeholder="https://example.com/tagged1.jpg", key="cv_b_urls"
+            )
+            if raw_cv_urls.strip():
+                url_list_cv = [u.strip() for u in raw_cv_urls.splitlines() if u.strip()]
+                with st.spinner(f"Loading {len(url_list_cv)} images…"):
+                    for i, u in enumerate(url_list_cv):
+                        try:
+                            r = requests.get(u, timeout=12); r.raise_for_status()
+                            img = Image.open(BytesIO(r.content)).convert("RGB")
+                            cv_images.append({"bytes": pil_to_bytes(img), "name": f"image_{i+1}"})
+                        except Exception as e:
+                            st.warning(f"URL {i+1} failed: {e}", icon=":material/warning:")
+
+        else:  # SKUs
+            cv_skus_raw = st.text_area(
+                "SKUs (one per line):", height=150,
+                placeholder="GE840EA6C62GANAFAMZ", key="cv_b_skus"
+            )
+            st.caption(f"Will search on **{base_url}**")
+            if cv_skus_raw.strip():
+                skus_ = [s.strip() for s in cv_skus_raw.splitlines() if s.strip()]
+                st.info(f"{len(skus_)} SKUs entered", icon=":material/list:")
+                if st.button("Search All SKUs", icon=":material/search:",
+                              key="cv_b_sku_search", type="primary"):
+                    prog_   = st.progress(0)
+                    status_ = st.empty()
+                    new_cv: list[dict] = []
+                    for i, sku_ in enumerate(skus_):
+                        status_.text(f"Fetching {i+1}/{len(skus_)}: {sku_}")
+                        img_ = fetch_image_from_sku(sku_, base_url)
+                        if img_:
+                            new_cv.append({"bytes": pil_to_bytes(img_.convert("RGB")), "name": sku_})
+                        else:
+                            st.warning(f"No image for SKU: {sku_}", icon=":material/image_not_supported:")
+                        prog_.progress((i+1)/len(skus_))
+                    st.session_state["cv_bulk_sku_results"] = new_cv
+                    status_.success(f"Found {len(new_cv)}/{len(skus_)} images.", icon=":material/check_circle:")
+            cv_images = st.session_state.get("cv_bulk_sku_results", [])
+            if cv_images:
+                st.info(f"{len(cv_images)} SKU images ready.", icon=":material/check_circle:")
+
+        if cv_images:
+            st.markdown("---")
+            st.subheader(f"{len(cv_images)} tagged images ready to convert")
+            st.markdown("**Originals (with old tags):**")
+            for rs in range(0, len(cv_images), 4):
+                cols_ = st.columns(4)
+                for ci, item in enumerate(cv_images[rs:rs+4]):
+                    with cols_[ci]:
+                        try:
+                            st.image(bytes_to_pil(item["bytes"]).convert("RGB"),
+                                     caption=item["name"], use_container_width=True)
+                        except Exception:
+                            st.caption(f"[{item['name']}]")
+            st.markdown("---")
+            if st.button(f"Convert All to {tag_type}", icon=":material/swap_horiz:",
+                          use_container_width=True, key="cv_b_process", type="primary"):
+                tag_img = load_tag_image(tag_type)
+                if tag_img is not None:
+                    prog_   = st.progress(0)
+                    converted = []
+                    for i, item in enumerate(cv_images):
+                        try:
+                            tagged_ = bytes_to_pil(item["bytes"]).convert("RGB")
+                            converted.append({"img": strip_and_retag(tagged_, tag_img), "name": item["name"]})
+                        except Exception as e:
+                            st.warning(f"Error on {item['name']}: {e}", icon=":material/warning:")
+                        prog_.progress((i+1)/len(cv_images))
+                    if converted:
+                        st.success(f"{len(converted)} images converted to {tag_type}.", icon=":material/check_circle:")
+                        zb = BytesIO()
+                        with zipfile.ZipFile(zb,"w",zipfile.ZIP_DEFLATED) as zf:
+                            for c in converted:
+                                zf.writestr(f"{c['name']}_{tag_type.lower().replace(' ','_')}.jpg",
+                                            image_to_jpeg_bytes(c["img"]))
+                        zb.seek(0)
+                        st.download_button(
+                            f"Download All {len(converted)} Converted Images (ZIP)", zb,
+                            f"converted_{tag_type.lower().replace(' ','_')}.zip",
+                            "application/zip", use_container_width=True,
+                            icon=":material/download:", key="cv_b_dl"
+                        )
+                        st.markdown("### Preview")
+                        pcols = st.columns(4)
+                        for i, c in enumerate(converted[:8]):
+                            with pcols[i%4]:
+                                st.image(c["img"], caption=c["name"], use_container_width=True)
+                        if len(converted) > 8:
+                            st.caption(f"Showing 8 of {len(converted)}")
+                    else:
+                        st.error("No images were successfully converted.", icon=":material/error:")
+        else:
+            st.info("Provide images using one of the input methods above.", icon=":material/image:")
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.markdown("""
