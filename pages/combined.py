@@ -1032,12 +1032,20 @@ def strip_and_retag(tagged: Image.Image, new_tag: Image.Image) -> Image.Image:
     
     # 1. Detect boundaries intelligently without hitting the product
     strip_left, banner_top = detect_tag_boundaries(rgb)
+    
+    # FIX: Clamp boundaries to ensure they don't exceed image dimensions 
+    # to prevent PIL ValueErrors (x0 > x1 or y0 > y1)
+    strip_left = min(strip_left, w)
+    banner_top = min(banner_top, h)
+    
     canvas = rgb.copy()
     draw   = ImageDraw.Draw(canvas)
     
-    # 2. White out ONLY the old tag areas
-    draw.rectangle([strip_left, 0, w, h], fill=(255, 255, 255))
-    draw.rectangle([0, banner_top, w, h], fill=(255, 255, 255))
+    # 2. White out ONLY the old tag areas (if they exist)
+    if strip_left < w:
+        draw.rectangle([strip_left, 0, w, h], fill=(255, 255, 255))
+    if banner_top < h:
+        draw.rectangle([0, banner_top, w, h], fill=(255, 255, 255))
     
     # 3. Resize the new tag to fit the canvas exactly before pasting
     resized_tag = new_tag.resize((w, h), Image.Resampling.LANCZOS)
