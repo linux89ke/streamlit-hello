@@ -595,7 +595,7 @@ def load_tag_image(grade: str) -> Image.Image | None:
     path = get_tag_path(TAG_FILES[grade])
     if not os.path.exists(path):
         st.error(
-            f"Tag file not found: **{TAG_FILES[grade]}**  \n"
+            f"Tag file not found: **{TAG_FILES[grade]}** \n"
             "Ensure all tag PNG files are in the same directory as this app.",
             icon=":material/error:"
         )
@@ -908,8 +908,6 @@ def trigger_mismatch_or_commit(
         _commit_pending_image(target_slot)
 
 
-
-
 # ══════════════════════════════════════════════════════════════════════════════
 #  IMAGE PROCESSING — TAGGING
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1014,10 +1012,14 @@ def strip_and_retag(tagged: Image.Image, new_tag: Image.Image) -> Image.Image:
     draw   = ImageDraw.Draw(canvas)
     draw.rectangle([strip_left, 0, w, h],       fill=(255, 255, 255))
     draw.rectangle([0, banner_top, w, h],        fill=(255, 255, 255))
-    if new_tag.mode == "RGBA":
-        canvas.paste(new_tag, (0, 0), new_tag)
+    
+    # Resize the new tag to fit the canvas exactly before pasting
+    resized_tag = new_tag.resize((w, h), Image.Resampling.LANCZOS)
+    
+    if resized_tag.mode == "RGBA":
+        canvas.paste(resized_tag, (0, 0), resized_tag)
     else:
-        canvas.paste(new_tag, (0, 0))
+        canvas.paste(resized_tag, (0, 0))
     return canvas
 
 
@@ -1480,7 +1482,7 @@ def process_inputs(text_in, file_in, d: str) -> list[dict]:
             df = pd.read_excel(file_in, header=None) \
                  if file_in.name.endswith(".xlsx") else pd.read_csv(file_in, header=None)
             raw.update(str(c).strip() for c in df.values.flatten()
-                       if str(c).strip() and str(c).lower() != "nan")
+                        if str(c).strip() and str(c).lower() != "nan")
         except Exception as e:
             st.error(f"File read error: {e}", icon=":material/error:")
     targets = []
@@ -2080,7 +2082,7 @@ with tab_bulk:
                     )
                     st.warning(
                         f"**{len(mismatches)} SKU(s) found on a different Jumia country "
-                        f"than {region_choice}:**  \n{mismatch_lines}  \n\n"
+                        f"than {region_choice}:** \n{mismatch_lines}  \n\n"
                         "Images were loaded successfully. You may want to change "
                         "your active region in the sidebar.",
                         icon=":material/public:"
@@ -2135,9 +2137,8 @@ with tab_bulk:
                     st.caption(f"{sc}%")
 
         st.markdown("---")
-        if st.button("Process All Images",
-                      icon=":material/tune:", key="b_process",
-                      type="primary"):
+        
+        if st.button("Process All Images", icon=":material/tune:", key="b_process", type="primary"):
             tag_img = load_tag_image(tag_type)
             if tag_img is not None:
                 prog      = st.progress(0)
@@ -2158,41 +2159,42 @@ with tab_bulk:
                     prog.progress((i+1)/len(products_to_process))
 
                 if processed:
-                    st.success(f"{len(processed)} images processed.",
-                               icon=":material/check_circle:")
+                    st.success(f"{len(processed)} images processed.", icon=":material/check_circle:")
                     zb = BytesIO()
                     with zipfile.ZipFile(zb, "w", zipfile.ZIP_DEFLATED) as zf:
                         for p in processed:
-                            zf.writestr(
-                                f"{p['name']}_1.jpg",
-                                image_to_jpeg_bytes(p["img"])
-                            )
+                            zf.writestr(f"{p['name']}_1.jpg", image_to_jpeg_bytes(p["img"]))
                     zb.seek(0)
-                    st.download_button(
-                        f"Download All {len(processed)} Images (ZIP)",
-                        zb,
-                        f"tagged_{tag_type.lower().replace(' ','_')}.zip",
-                        "application/zip",
-                        use_container_width=True,
-                        icon=":material/download:",
-                        key="b_dl"
-                    )
-                    st.markdown("### Preview")
-                    pcols = st.columns(4)
-                    for i, p in enumerate(processed[:8]):
-                        with pcols[i%4]:
-                            st.image(p["img"], caption=p["name"],
-                                     use_container_width=True)
-                    if len(processed) > 8:
-                        st.caption(f"Showing 8 of {len(processed)}")
+                    
+                    # Store variables in session state instead of rendering immediate button
+                    st.session_state["b_bulk_zip"] = zb.getvalue()
+                    st.session_state["b_bulk_preview"] = processed[:8]
+                    st.session_state["b_bulk_total"] = len(processed)
                 else:
-                    st.error("No images were successfully processed.",
-                             icon=":material/error:")
+                    st.error("No images were successfully processed.", icon=":material/error:")
+
+        # --- Show download button completely outside the action logic ---
+        if "b_bulk_zip" in st.session_state:
+            st.download_button(
+                f"Download All {st.session_state['b_bulk_total']} Images (ZIP)",
+                st.session_state["b_bulk_zip"],
+                f"tagged_{tag_type.lower().replace(' ','_')}.zip",
+                "application/zip",
+                use_container_width=True,
+                icon=":material/download:",
+                key="b_dl"
+            )
+            st.markdown("### Preview")
+            pcols = st.columns(4)
+            for i, p in enumerate(st.session_state["b_bulk_preview"]):
+                with pcols[i%4]:
+                    st.image(p["img"], caption=p["name"], use_container_width=True)
+            if st.session_state["b_bulk_total"] > 8:
+                st.caption(f"Showing 8 of {st.session_state['b_bulk_total']}")
+
     else:
         st.info("Provide images using one of the input methods above.",
                 icon=":material/image:")
-
-
 
 
 # ┌─────────────────────────────────────────────────────────────────────────────
@@ -2502,7 +2504,7 @@ with tab_convert:
                         )
                         st.warning(
                             f"**{len(cv_mismatches)} SKU(s) found on a different Jumia "
-                            f"country than {region_choice}:**  \n{mm_lines}  \n\n"
+                            f"country than {region_choice}:** \n{mm_lines}  \n\n"
                             "Images were loaded. You may want to update your region in the sidebar.",
                             icon=":material/public:"
                         )
@@ -2526,6 +2528,7 @@ with tab_convert:
                         except Exception:
                             st.caption(f"[{item['name']}]")
             st.markdown("---")
+            
             if st.button(f"Convert All to {tag_type}", icon=":material/swap_horiz:",
                           use_container_width=True, key="cv_b_process", type="primary"):
                 tag_img = load_tag_image(tag_type)
@@ -2547,21 +2550,32 @@ with tab_convert:
                                 zf.writestr(f"{c['name']}_{tag_type.lower().replace(' ','_')}.jpg",
                                             image_to_jpeg_bytes(c["img"]))
                         zb.seek(0)
-                        st.download_button(
-                            f"Download All {len(converted)} Converted Images (ZIP)", zb,
-                            f"converted_{tag_type.lower().replace(' ','_')}.zip",
-                            "application/zip", use_container_width=True,
-                            icon=":material/download:", key="cv_b_dl"
-                        )
-                        st.markdown("### Preview")
-                        pcols = st.columns(4)
-                        for i, c in enumerate(converted[:8]):
-                            with pcols[i%4]:
-                                st.image(c["img"], caption=c["name"], use_container_width=True)
-                        if len(converted) > 8:
-                            st.caption(f"Showing 8 of {len(converted)}")
+                        
+                        # Set to Session State
+                        st.session_state["cv_bulk_zip"] = zb.getvalue()
+                        st.session_state["cv_bulk_preview"] = converted[:8]
+                        st.session_state["cv_bulk_total"] = len(converted)
                     else:
                         st.error("No images were successfully converted.", icon=":material/error:")
+            
+            # --- Show download button outside action logic ---
+            if "cv_bulk_zip" in st.session_state:
+                st.download_button(
+                    f"Download All {st.session_state['cv_bulk_total']} Converted Images (ZIP)",
+                    data=st.session_state["cv_bulk_zip"],
+                    file_name=f"converted_{tag_type.lower().replace(' ','_')}.zip",
+                    mime="application/zip",
+                    use_container_width=True,
+                    icon=":material/download:", 
+                    key="cv_b_dl"
+                )
+                st.markdown("### Preview")
+                pcols = st.columns(4)
+                for i, c in enumerate(st.session_state["cv_bulk_preview"]):
+                    with pcols[i%4]:
+                        st.image(c["img"], caption=c["name"], use_container_width=True)
+                if st.session_state["cv_bulk_total"] > 8:
+                    st.caption(f"Showing 8 of {st.session_state['cv_bulk_total']}")
         else:
             st.info("Provide images using one of the input methods above.", icon=":material/image:")
 
