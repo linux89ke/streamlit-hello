@@ -400,6 +400,26 @@ DOMAIN_MAP = {
     "Ghana (GH)":   "jumia.com.gh",
 }
 
+# ── Reverse map: domain string → country key ──────────────────────────────────
+_DOMAIN_TO_COUNTRY: dict[str, str] = {v: k for k, v in DOMAIN_MAP.items()}
+
+def detect_country_from_url(url: str) -> str | None:
+    """
+    Parse a URL and return the DOMAIN_MAP key if the domain matches a known
+    Jumia country, otherwise return None.
+    e.g. 'https://www.jumia.com.ng/...' → 'Nigeria (NG)'
+    """
+    try:
+        from urllib.parse import urlparse
+        host = urlparse(url).netloc.lower().lstrip("www.")
+        for domain, country_key in _DOMAIN_TO_COUNTRY.items():
+            if host == domain or host.endswith("." + domain):
+                return country_key
+    except Exception:
+        pass
+    return None
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  SESSION STATE INITIALISATION
 # ══════════════════════════════════════════════════════════════════════════════
@@ -407,12 +427,12 @@ _defaults = {
     # Analyzer
     "scraped_results": [],
     "failed_items":    [],
-    # Single-image tagging — store as raw bytes so PIL can reload after rerun
+    # Single-image tagging
     "single_img_bytes":  None,
     "single_img_label":  "",
     "single_img_source": None,
     "single_scale":      100,
-    # Convert-tag tab — persisted image bytes
+    # Convert-tag tab
     "cv_img_bytes":  None,
     "cv_img_label":  "",
     "cv_img_source": None,
@@ -424,6 +444,17 @@ _defaults = {
     "individual_scales":   {},
     # Geo — auto-detected country key (e.g. "Kenya (KE)")
     "geo_country": None,
+    # Country-mismatch dialog state
+    "mismatch_detected":       False,   # True when a mismatch was just found
+    "mismatch_url_country":    None,    # country key detected from URL/SKU
+    "mismatch_active_country": None,    # country that was active when mismatch found
+    "mismatch_context":        None,    # "single_tag" | "cv_single" | "bulk_sku" etc.
+    "mismatch_resolved":       False,   # True once user clicked Switch or Ignore
+    # Pending image load after mismatch resolution
+    "pending_img_bytes":  None,
+    "pending_img_label":  "",
+    "pending_img_source": None,
+    "pending_img_target": None,   # "single" | "cv_single"
 }
 for k, v in _defaults.items():
     if k not in st.session_state:
@@ -645,89 +676,238 @@ def get_driver(headless: bool = True, timeout: int = 20):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  JUMIA SKU → PRIMARY IMAGE
+#  JUMIA SKU → PRIMARY IMAGE  (with multi-country fallback)
 # ══════════════════════════════════════════════════════════════════════════════
-def fetch_image_from_sku(sku: str, b_url: str) -> Image.Image | None:
-    """Search Jumia by SKU, navigate to product page and return its primary image."""
+
+def _fetch_image_from_url_and_soup(driver, b_url: str) -> Image.Image | None:
+    """Given a driver already on a product page, extract & return the primary image."""
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    from selenium.common.exceptions import TimeoutException
+    try:
+        WebDriverWait(driver, 12).until(
+            EC.presence_of_element_located((By.TAG_NAME, "h1")))
+    except TimeoutException:
+        return None
+    time.sleep(1)
+    soup = BeautifulSoup(driver.page_source, "html.parser")
+    og   = soup.find("meta", property="og:image")
+    if og and og.get("content"):
+        image_url = og["content"]
+    else:
+        image_url = None
+        for img in soup.find_all("img", limit=20):
+            src = img.get("data-src") or img.get("src") or ""
+            if any(x in src for x in ["/product/", "/unsafe/", "jumia.is"]):
+                if src.startswith("//"): src = "https:" + src
+                elif src.startswith("/"): src = b_url + src
+                image_url = src
+                break
+    if not image_url:
+        return None
+    r = requests.get(image_url,
+                     headers={"User-Agent": "Mozilla/5.0", "Referer": b_url},
+                     timeout=15)
+    r.raise_for_status()
+    return Image.open(BytesIO(r.content)).convert("RGBA")
+
+
+def fetch_image_from_sku(
+    sku: str,
+    primary_b_url: str,
+    try_all_countries: bool = True,
+) -> tuple[Image.Image | None, str | None]:
+    """
+    Search Jumia for a SKU.
+
+    Strategy
+    --------
+    1. Try ``primary_b_url`` (the currently active country) first.
+    2. If not found AND ``try_all_countries`` is True, iterate through all other
+       Jumia domains in order.
+    3. Return ``(image, found_country_key)`` — found_country_key is None if the
+       search failed entirely, or the DOMAIN_MAP key for the country where the
+       product was actually located.
+    """
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
     from selenium.common.exceptions import TimeoutException
 
-    search_url = f"{b_url}/catalog/?q={sku}"
-    driver = get_driver(headless=True)
-    if not driver:
-        st.error("Could not initialise browser driver.", icon=":material/error:")
-        return None
-    try:
-        driver.get(search_url)
+    def _try_single_country(b_url: str) -> Image.Image | None:
+        search_url = f"{b_url}/catalog/?q={sku}"
+        driver = get_driver(headless=True)
+        if not driver:
+            return None
         try:
-            WebDriverWait(driver, 12).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "article.prd, h1")))
-        except TimeoutException:
-            st.error("Page timed out while searching for SKU.", icon=":material/timer:")
+            driver.get(search_url)
+            try:
+                WebDriverWait(driver, 12).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "article.prd, h1")))
+            except TimeoutException:
+                return None
+            if ("There are no results" in driver.page_source or
+                    "No results found" in driver.page_source):
+                return None
+            links = driver.find_elements(By.CSS_SELECTOR, "article.prd a.core")
+            if not links:
+                links = driver.find_elements(By.CSS_SELECTOR, "a[href*='.html']")
+            if not links:
+                return None
+            driver.get(links[0].get_attribute("href"))
+            return _fetch_image_from_url_and_soup(driver, b_url)
+        except Exception:
             return None
+        finally:
+            try: driver.quit()
+            except: pass
 
-        if "There are no results" in driver.page_source or \
-           "No results found" in driver.page_source:
-            st.warning(f"No products found for SKU: **{sku}**",
-                       icon=":material/search_off:")
-            return None
+    # 1 — try active country
+    img = _try_single_country(primary_b_url)
+    if img is not None:
+        # Resolve which country key corresponds to this domain
+        domain_ = primary_b_url.replace("https://www.", "")
+        found_key = _DOMAIN_TO_COUNTRY.get(domain_)
+        return img, found_key
 
-        links = driver.find_elements(By.CSS_SELECTOR, "article.prd a.core")
-        if not links:
-            links = driver.find_elements(By.CSS_SELECTOR, "a[href*='.html']")
-        if not links:
-            st.warning(f"No product links found for SKU: **{sku}**",
-                       icon=":material/search_off:")
-            return None
+    if not try_all_countries:
+        return None, None
 
-        # Navigate to the first product page
-        driver.get(links[0].get_attribute("href"))
-        try:
-            WebDriverWait(driver, 12).until(
-                EC.presence_of_element_located((By.TAG_NAME, "h1")))
-        except TimeoutException:
-            st.error("Product page timed out.", icon=":material/timer:")
-            return None
-        time.sleep(1)
+    # 2 — try remaining countries in order
+    primary_domain = primary_b_url.replace("https://www.", "")
+    for domain_, country_key in DOMAIN_MAP.items():
+        if DOMAIN_MAP[domain_] == primary_domain:
+            continue
+        alt_b_url = f"https://www.{DOMAIN_MAP[domain_]}"
+        img = _try_single_country(alt_b_url)
+        if img is not None:
+            return img, domain_
 
-        soup = BeautifulSoup(driver.page_source, "html.parser")
+    return None, None
 
-        # Priority 1: og:image meta tag (highest quality, always present)
-        og = soup.find("meta", property="og:image")
-        if og and og.get("content"):
-            image_url = og["content"]
-        else:
-            # Priority 2: first product gallery image
-            image_url = None
-            for img in soup.find_all("img", limit=20):
-                src = img.get("data-src") or img.get("src") or ""
-                if any(x in src for x in ["/product/", "/unsafe/", "jumia.is"]):
-                    if src.startswith("//"): src = "https:" + src
-                    elif src.startswith("/"): src = b_url + src
-                    image_url = src
-                    break
 
-        if not image_url:
-            st.warning("Product page found but could not extract an image.",
-                       icon=":material/image_not_supported:")
-            return None
+# ══════════════════════════════════════════════════════════════════════════════
+#  COUNTRY-MISMATCH DIALOG
+# ══════════════════════════════════════════════════════════════════════════════
+@st.dialog("Country Mismatch Detected")
+def show_country_mismatch_dialog(
+    active_country: str,
+    found_country: str,
+    context: str,
+):
+    """
+    Modal popup shown when a URL or SKU belongs to a different Jumia country
+    than the one currently active.
+    """
+    st.markdown(
+        f"""
+<div style="text-align:center;padding:8px 0 16px;">
+  <div style="font-size:2.5rem;margin-bottom:8px;">🌍</div>
+  <div style="font-size:1.05rem;font-weight:700;color:#1A1A1A;margin-bottom:6px;">
+    Product is from a different country
+  </div>
+  <div style="font-size:0.9rem;color:#6B6B6B;line-height:1.5;">
+    The product you entered belongs to
+    <strong style="color:#F68B1E">{found_country}</strong>,
+    but your active region is
+    <strong style="color:#1A1A1A">{active_country}</strong>.
+  </div>
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-        r = requests.get(
-            image_url,
-            headers={"User-Agent": "Mozilla/5.0", "Referer": b_url},
-            timeout=15
-        )
-        r.raise_for_status()
-        return Image.open(BytesIO(r.content)).convert("RGBA")
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.button(
+            f"Switch to {found_country}",
+            type="primary",
+            use_container_width=True,
+            icon=":material/swap_horiz:",
+            key=f"mismatch_switch_{context}",
+        ):
+            # Change the sidebar selectbox index
+            st.session_state["region_select"] = found_country
+            # Commit any pending image
+            _commit_pending_image(context)
+            st.session_state["mismatch_detected"] = False
+            st.session_state["mismatch_resolved"] = True
+            st.rerun()
 
-    except Exception as e:
-        st.error(f"Unexpected error fetching SKU image: {e}", icon=":material/error:")
-        return None
-    finally:
-        try: driver.quit()
-        except: pass
+    with col_b:
+        if st.button(
+            f"Keep {active_country}",
+            use_container_width=True,
+            icon=":material/check:",
+            key=f"mismatch_keep_{context}",
+        ):
+            # Commit image as-is (user acknowledged the mismatch)
+            _commit_pending_image(context)
+            st.session_state["mismatch_detected"] = False
+            st.session_state["mismatch_resolved"] = True
+            st.rerun()
+
+    st.caption(
+        "The image has been loaded — this choice only affects which country "
+        "will be used for future searches and analysis."
+    )
+
+
+def _commit_pending_image(context: str):
+    """Copy pending image bytes into the right session-state slot."""
+    b = st.session_state.get("pending_img_bytes")
+    if b is None:
+        return
+    target = st.session_state.get("pending_img_target", context)
+    if target == "single":
+        st.session_state["single_img_bytes"]  = b
+        st.session_state["single_img_label"]  = st.session_state.get("pending_img_label","")
+        st.session_state["single_img_source"] = st.session_state.get("pending_img_source","sku")
+        st.session_state["single_scale"]      = 100
+    elif target == "cv_single":
+        st.session_state["cv_img_bytes"]  = b
+        st.session_state["cv_img_label"]  = st.session_state.get("pending_img_label","")
+        st.session_state["cv_img_source"] = st.session_state.get("pending_img_source","sku")
+    # clear pending
+    st.session_state["pending_img_bytes"]  = None
+    st.session_state["pending_img_label"]  = ""
+    st.session_state["pending_img_source"] = None
+    st.session_state["pending_img_target"] = None
+
+
+def trigger_mismatch_or_commit(
+    img: Image.Image,
+    label: str,
+    source: str,
+    found_country: str | None,
+    active_country: str,
+    target_slot: str,           # "single" | "cv_single"
+):
+    """
+    If found_country differs from active_country, stash the image as 'pending'
+    and trigger the mismatch dialog.  Otherwise commit immediately.
+    """
+    img_bytes = pil_to_bytes(img.convert("RGB") if source != "upload" else img)
+    if found_country and found_country != active_country:
+        st.session_state["pending_img_bytes"]       = img_bytes
+        st.session_state["pending_img_label"]       = label
+        st.session_state["pending_img_source"]      = source
+        st.session_state["pending_img_target"]      = target_slot
+        st.session_state["mismatch_detected"]       = True
+        st.session_state["mismatch_url_country"]    = found_country
+        st.session_state["mismatch_active_country"] = active_country
+        st.session_state["mismatch_context"]        = target_slot
+        st.session_state["mismatch_resolved"]       = False
+    else:
+        # No mismatch — commit directly
+        st.session_state["pending_img_bytes"]  = img_bytes
+        st.session_state["pending_img_label"]  = label
+        st.session_state["pending_img_source"] = source
+        st.session_state["pending_img_target"] = target_slot
+        _commit_pending_image(target_slot)
+
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1316,6 +1496,14 @@ def process_inputs(text_in, file_in, d: str) -> list[dict]:
     return targets
 
 
+# ── Fire mismatch dialog if one is pending ────────────────────────────────────
+if st.session_state.get("mismatch_detected"):
+    show_country_mismatch_dialog(
+        active_country=st.session_state["mismatch_active_country"],
+        found_country=st.session_state["mismatch_url_country"],
+        context=st.session_state["mismatch_context"],
+    )
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  TABS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1613,15 +1801,21 @@ with tab_single:
                 if img_url:
                     with st.spinner("Fetching image…"):
                         try:
+                            # Check if this URL belongs to a Jumia country
+                            url_country = detect_country_from_url(img_url)
                             r = requests.get(img_url, timeout=15)
                             r.raise_for_status()
                             img = Image.open(BytesIO(r.content)).convert("RGBA")
-                            st.session_state["single_img_bytes"]  = pil_to_bytes(img)
-                            st.session_state["single_img_label"]  = img_url
-                            st.session_state["single_img_source"] = "url"
-                            st.session_state["single_scale"]      = 100
-                            st.success("Image loaded successfully.",
-                                       icon=":material/check_circle:")
+                            trigger_mismatch_or_commit(
+                                img=img, label=img_url, source="url",
+                                found_country=url_country,
+                                active_country=region_choice,
+                                target_slot="single",
+                            )
+                            if not st.session_state.get("mismatch_detected"):
+                                st.success("Image loaded successfully.",
+                                           icon=":material/check_circle:")
+                            st.rerun()
                         except Exception as e:
                             st.error(f"Could not load image: {e}",
                                      icon=":material/error:")
@@ -1635,24 +1829,38 @@ with tab_single:
                 placeholder="e.g. GE840EA6C62GANAFAMZ",
                 key="s_sku"
             )
-            st.caption(f"Will search on **{base_url}**")
+            st.caption(f"Searches **{base_url}** first, then all other Jumia countries.")
 
             if st.button("Search & Extract Image",
                           icon=":material/search:", key="s_sku_search",
                           type="primary"):
                 if sku_val.strip():
-                    with st.spinner(
-                            f"Searching {domain} for SKU **{sku_val.strip()}**…"):
-                        img = fetch_image_from_sku(sku_val.strip(), base_url)
-                        if img is not None:
-                            st.session_state["single_img_bytes"]  = pil_to_bytes(img)
-                            st.session_state["single_img_label"]  = sku_val.strip()
-                            st.session_state["single_img_source"] = "sku"
-                            st.session_state["single_scale"]      = 100
+                    prog_holder = st.empty()
+                    prog_holder.info(
+                        f"Searching **{region_choice}** for SKU `{sku_val.strip()}`…",
+                        icon=":material/search:"
+                    )
+                    img, found_country = fetch_image_from_sku(
+                        sku_val.strip(), base_url, try_all_countries=True)
+                    prog_holder.empty()
+                    if img is not None:
+                        trigger_mismatch_or_commit(
+                            img=img, label=sku_val.strip(), source="sku",
+                            found_country=found_country,
+                            active_country=region_choice,
+                            target_slot="single",
+                        )
+                        if not st.session_state.get("mismatch_detected"):
                             st.success(
-                                f"Image loaded for SKU **{sku_val.strip()}**",
+                                f"Image loaded for SKU **{sku_val.strip()}**"
+                                + (f" (found in {found_country})" if found_country and found_country != region_choice else ""),
                                 icon=":material/check_circle:")
-                        # error messages are emitted inside fetch_image_from_sku
+                        st.rerun()
+                    else:
+                        st.error(
+                            f"SKU **{sku_val.strip()}** not found on any Jumia country.",
+                            icon=":material/search_off:"
+                        )
                 else:
                     st.warning("Please enter a SKU.", icon=":material/warning:")
 
@@ -1842,21 +2050,42 @@ with tab_bulk:
                 prog   = st.progress(0)
                 status = st.empty()
                 new_results: list[dict] = []
+                mismatches: list[dict]  = []
 
                 for i, sku in enumerate(skus):
                     status.text(f"Fetching {i+1}/{len(skus)}: {sku}")
-                    img = fetch_image_from_sku(sku, base_url)
+                    img, found_country = fetch_image_from_sku(
+                        sku, base_url, try_all_countries=True)
                     if img:
                         new_results.append({
                             "bytes": pil_to_bytes(img),
                             "name":  sku,
                         })
+                        if found_country and found_country != region_choice:
+                            mismatches.append({
+                                "sku": sku,
+                                "found_in": found_country,
+                            })
                     else:
                         st.warning(f"No image for SKU: {sku}",
                                    icon=":material/image_not_supported:")
                     prog.progress((i+1)/len(skus))
 
                 st.session_state["bulk_sku_results"] = new_results
+
+                if mismatches:
+                    mismatch_lines = "  \n".join(
+                        f"• **{m['sku']}** — found in {m['found_in']}"
+                        for m in mismatches
+                    )
+                    st.warning(
+                        f"**{len(mismatches)} SKU(s) found on a different Jumia country "
+                        f"than {region_choice}:**  \n{mismatch_lines}  \n\n"
+                        "Images were loaded successfully. You may want to change "
+                        "your active region in the sidebar.",
+                        icon=":material/public:"
+                    )
+
                 status.success(
                     f"Found {len(new_results)} / {len(skus)} images.",
                     icon=":material/check_circle:")
@@ -2033,13 +2262,19 @@ with tab_convert:
                     if img_url_cv.strip():
                         with st.spinner("Fetching image…"):
                             try:
+                                url_country = detect_country_from_url(img_url_cv.strip())
                                 r = requests.get(img_url_cv.strip(), timeout=15)
                                 r.raise_for_status()
                                 img = Image.open(BytesIO(r.content)).convert("RGB")
-                                st.session_state["cv_img_bytes"]  = pil_to_bytes(img)
-                                st.session_state["cv_img_label"]  = img_url_cv.strip()
-                                st.session_state["cv_img_source"] = "url"
-                                st.success("Image loaded.", icon=":material/check_circle:")
+                                trigger_mismatch_or_commit(
+                                    img=img, label=img_url_cv.strip(), source="url",
+                                    found_country=url_country,
+                                    active_country=region_choice,
+                                    target_slot="cv_single",
+                                )
+                                if not st.session_state.get("mismatch_detected"):
+                                    st.success("Image loaded.", icon=":material/check_circle:")
+                                st.rerun()
                             except Exception as e:
                                 st.error(f"Could not load image: {e}", icon=":material/error:")
                     else:
@@ -2055,6 +2290,8 @@ with tab_convert:
                 if st.button("Extract Image from Page",
                               icon=":material/travel_explore:", key="cv_s_prod_load"):
                     if prod_url_cv.strip():
+                        # Detect country from URL before even fetching
+                        url_country = detect_country_from_url(prod_url_cv.strip())
                         with st.spinner("Opening product page and extracting image…"):
                             try:
                                 from selenium.webdriver.common.by import By as _By
@@ -2086,11 +2323,17 @@ with tab_convert:
                                                 timeout=15)
                                             r_.raise_for_status()
                                             img = Image.open(BytesIO(r_.content)).convert("RGB")
-                                            st.session_state["cv_img_bytes"]  = pil_to_bytes(img)
-                                            st.session_state["cv_img_label"]  = prod_url_cv.strip()
-                                            st.session_state["cv_img_source"] = "product_url"
-                                            st.success("Image extracted from product page.",
-                                                       icon=":material/check_circle:")
+                                            trigger_mismatch_or_commit(
+                                                img=img, label=prod_url_cv.strip(),
+                                                source="product_url",
+                                                found_country=url_country,
+                                                active_country=region_choice,
+                                                target_slot="cv_single",
+                                            )
+                                            if not st.session_state.get("mismatch_detected"):
+                                                st.success("Image extracted from product page.",
+                                                           icon=":material/check_circle:")
+                                            st.rerun()
                                         else:
                                             st.warning("Could not find an image on that page.",
                                                        icon=":material/image_not_supported:")
@@ -2109,19 +2352,37 @@ with tab_convert:
                     placeholder="e.g. GE840EA6C62GANAFAMZ",
                     key="cv_s_sku"
                 )
-                st.caption(f"Will search on **{base_url}**")
+                st.caption(f"Searches **{base_url}** first, then all other Jumia countries.")
                 if st.button("Search & Extract Image",
                               icon=":material/search:", key="cv_s_sku_search",
                               type="primary"):
                     if sku_cv.strip():
-                        with st.spinner(f"Searching {domain} for **{sku_cv.strip()}**…"):
-                            img = fetch_image_from_sku(sku_cv.strip(), base_url)
-                            if img is not None:
-                                st.session_state["cv_img_bytes"]  = pil_to_bytes(img.convert("RGB"))
-                                st.session_state["cv_img_label"]  = sku_cv.strip()
-                                st.session_state["cv_img_source"] = "sku"
-                                st.success(f"Image loaded for SKU **{sku_cv.strip()}**",
-                                           icon=":material/check_circle:")
+                        prog_cv = st.empty()
+                        prog_cv.info(
+                            f"Searching **{region_choice}** for SKU `{sku_cv.strip()}`…",
+                            icon=":material/search:"
+                        )
+                        img, found_country = fetch_image_from_sku(
+                            sku_cv.strip(), base_url, try_all_countries=True)
+                        prog_cv.empty()
+                        if img is not None:
+                            trigger_mismatch_or_commit(
+                                img=img, label=sku_cv.strip(), source="sku",
+                                found_country=found_country,
+                                active_country=region_choice,
+                                target_slot="cv_single",
+                            )
+                            if not st.session_state.get("mismatch_detected"):
+                                st.success(
+                                    f"Image loaded for SKU **{sku_cv.strip()}**"
+                                    + (f" (found in {found_country})" if found_country and found_country != region_choice else ""),
+                                    icon=":material/check_circle:")
+                            st.rerun()
+                        else:
+                            st.error(
+                                f"SKU **{sku_cv.strip()}** not found on any Jumia country.",
+                                icon=":material/search_off:"
+                            )
                     else:
                         st.warning("Please enter a SKU.", icon=":material/warning:")
 
@@ -2220,15 +2481,32 @@ with tab_convert:
                     prog_   = st.progress(0)
                     status_ = st.empty()
                     new_cv: list[dict] = []
+                    cv_mismatches: list[dict] = []
                     for i, sku_ in enumerate(skus_):
                         status_.text(f"Fetching {i+1}/{len(skus_)}: {sku_}")
-                        img_ = fetch_image_from_sku(sku_, base_url)
+                        img_, found_ = fetch_image_from_sku(
+                            sku_, base_url, try_all_countries=True)
                         if img_:
                             new_cv.append({"bytes": pil_to_bytes(img_.convert("RGB")), "name": sku_})
+                            if found_ and found_ != region_choice:
+                                cv_mismatches.append({"sku": sku_, "found_in": found_})
                         else:
                             st.warning(f"No image for SKU: {sku_}", icon=":material/image_not_supported:")
                         prog_.progress((i+1)/len(skus_))
                     st.session_state["cv_bulk_sku_results"] = new_cv
+
+                    if cv_mismatches:
+                        mm_lines = "  \n".join(
+                            f"• **{m['sku']}** — found in {m['found_in']}"
+                            for m in cv_mismatches
+                        )
+                        st.warning(
+                            f"**{len(cv_mismatches)} SKU(s) found on a different Jumia "
+                            f"country than {region_choice}:**  \n{mm_lines}  \n\n"
+                            "Images were loaded. You may want to update your region in the sidebar.",
+                            icon=":material/public:"
+                        )
+
                     status_.success(f"Found {len(new_cv)}/{len(skus_)} images.", icon=":material/check_circle:")
             cv_images = st.session_state.get("cv_bulk_sku_results", [])
             if cv_images:
