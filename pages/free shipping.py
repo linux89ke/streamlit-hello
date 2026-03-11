@@ -130,38 +130,66 @@ def erase_baked_in_truck(image: Image.Image) -> Image.Image:
 
 
 def split_product_and_side_tag(prod_resized: Image.Image):
+    """
+    Split a product image by scanning right-to-left to find the white gap 
+    between the side tag and the product.
+    """
     arr = np.array(prod_resized)
     h, w = arr.shape[:2]
+    
+    # 1. Create a mask of non-white pixels
+    nw_mask = (arr[:, :, 0] < 240) | (arr[:, :, 1] < 240) | (arr[:, :, 2] < 240)
+    col_counts = np.sum(nw_mask, axis=0)
+
+    side_tag_right = None
     split_x = None
-    for x in range(int(w * 0.60), w):
-        col = arr[:, x, :3]
-        if int(np.sum((col[:, 0] < 240) | (col[:, 1] < 240) | (col[:, 2] < 240))) > h * 0.45:
+
+    # 2. Find the right-most edge of the side tag
+    for x in range(w - 1, int(w * 0.5), -1):
+        if col_counts[x] > h * 0.1:  # At least 10% of column has content
+            side_tag_right = x
+            break
+
+    if side_tag_right is None:
+        return prod_resized, None, w
+
+    # 3. Move left from the tag until we hit an empty vertical gap
+    for x in range(side_tag_right, int(w * 0.3), -1):
+        if col_counts[x] < 2:  # Found a purely white column (the gap!)
             split_x = x
             break
+
     if split_x is None:
         return prod_resized, None, w
 
-    right = arr[:, split_x:, :3]
-    nw_mask = (right[:, :, 0] < 240) | (right[:, :, 1] < 240) | (right[:, :, 2] < 240)
-    nw_pixels = right[nw_mask]
+    # 4. Validate that what we isolated on the right is actually a side tag
+    right = arr[:, split_x:side_tag_right+1, :3]
+    tag_nw_mask = (right[:, :, 0] < 240) | (right[:, :, 1] < 240) | (right[:, :, 2] < 240)
+    nw_pixels = right[tag_nw_mask]
+
     if len(nw_pixels) == 0:
         return prod_resized, None, w
 
+    # Check for navy blue dominance
     navy = ((nw_pixels[:, 2] > nw_pixels[:, 0]) &
             (nw_pixels[:, 2] > nw_pixels[:, 1]) &
-            (nw_pixels[:, 0] < 100))
+            (nw_pixels[:, 0] < 150))
     navy_pct = float(navy.sum()) / len(nw_pixels)
 
-    nw_coords = np.where(nw_mask)
+    # Check aspect ratio (must be tall and narrow)
+    nw_coords = np.where(tag_nw_mask)
     content_w = int(nw_coords[1].max() - nw_coords[1].min()) + 1
     content_h = int(nw_coords[0].max() - nw_coords[0].min()) + 1
     aspect = content_h / max(content_w, 1)
 
-    if navy_pct < 0.55 or aspect < 2.0:
+    # If it's not a navy tag or not tall enough, abort split
+    if navy_pct < 0.35 or aspect < 1.5:
         return prod_resized, None, w
 
+    # 5. Successfully split!
     bottles = prod_resized.crop((0, 0, split_x, h))
     side_tag = prod_resized.crop((split_x, 0, w, h))
+    
     return bottles, side_tag, split_x
 
 
