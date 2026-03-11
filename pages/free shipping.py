@@ -172,7 +172,9 @@ def split_product_and_side_tag(prod_resized: Image.Image):
     """
     Split a product image into (bottles_crop, side_tag_crop, split_x) by finding
     the first column from 60% right that has >45% non-white pixels (tall dense tag).
-    Returns None for side_tag_crop if no side tag is found.
+
+    Validates the right portion is a true info banner (navy blue, tall & narrow)
+    and not a cropped product bottle. Returns None for side_tag_crop if not found.
     """
     arr = np.array(prod_resized)
     h, w = arr.shape[:2]
@@ -184,6 +186,30 @@ def split_product_and_side_tag(prod_resized: Image.Image):
             break
     if split_x is None:
         return prod_resized, None, w
+
+    # Validate: the right portion must be a navy/dark banner, not a cropped bottle
+    right = arr[:, split_x:, :3]
+    nw_mask = (right[:, :, 0] < 240) | (right[:, :, 1] < 240) | (right[:, :, 2] < 240)
+    nw_pixels = right[nw_mask]
+    if len(nw_pixels) == 0:
+        return prod_resized, None, w
+
+    # Check navy dominance: B > R, B > G, and all channels dark
+    navy = ((nw_pixels[:, 2] > nw_pixels[:, 0]) &
+            (nw_pixels[:, 2] > nw_pixels[:, 1]) &
+            (nw_pixels[:, 0] < 100))
+    navy_pct = float(navy.sum()) / len(nw_pixels)
+
+    # Check aspect ratio of content (side tag is very tall and narrow)
+    nw_coords = np.where(nw_mask)
+    content_w = int(nw_coords[1].max() - nw_coords[1].min()) + 1
+    content_h = int(nw_coords[0].max() - nw_coords[0].min()) + 1
+    aspect = content_h / max(content_w, 1)
+
+    # True side tag: very navy (>55%) AND taller than wide (aspect > 2)
+    if navy_pct < 0.55 or aspect < 2.0:
+        return prod_resized, None, w
+
     bottles = prod_resized.crop((0, 0, split_x, h))
     side_tag = prod_resized.crop((split_x, 0, w, h))
     return bottles, side_tag, split_x
