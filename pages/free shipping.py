@@ -112,21 +112,27 @@ def load_free_delivery_tag():
 def erase_baked_in_truck(image: Image.Image) -> Image.Image:
     """
     Detect and white-out any baked-in orange Free Delivery truck in the image.
-    Orange is identified as R>180, G 80-160, B<80.
-    Returns a copy with the truck area replaced by white.
+    Only scans the TOP 20% of the image — a real truck is always in a corner,
+    never mid-image — preventing product logos/decorations from being erased.
     """
     arr = np.array(image.convert("RGBA"))
+    h = arr.shape[0]
+    top_zone = int(h * 0.20)   # only look in top 20%
+
+    region = arr[:top_zone, :, :]
     orange = (
-        (arr[:, :, 0] > 180) &
-        (arr[:, :, 1] > 80)  & (arr[:, :, 1] < 160) &
-        (arr[:, :, 2] < 80)
+        (region[:, :, 0] > 180) &
+        (region[:, :, 1] > 80)  & (region[:, :, 1] < 160) &
+        (region[:, :, 2] < 80)
     )
     if not np.any(orange):
-        return image  # nothing to erase
+        return image  # no truck found
 
     ys, xs = np.where(orange)
-    y1, y2 = max(0, ys.min() - 12), min(arr.shape[0], ys.max() + 12)
-    x1, x2 = max(0, xs.min() - 12), min(arr.shape[1], xs.max() + 12)
+    y1 = max(0, int(ys.min()) - 12)
+    y2 = min(top_zone, int(ys.max()) + 12)
+    x1 = max(0, int(xs.min()) - 12)
+    x2 = min(arr.shape[1], int(xs.max()) + 12)
     arr[y1:y2, x1:x2] = [255, 255, 255, 255]
     return Image.fromarray(arr)
 
