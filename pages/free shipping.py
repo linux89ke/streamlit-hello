@@ -212,18 +212,20 @@ def composite_image(product_image: Image.Image,
     - Truck renders at FULL size (side tag width), never shrunk.
     - If truck overlaps side tag, the side tag is shifted down and scaled to fit.
     """
-    CANVAS = 1000
-    OUTER_MARGIN = 90   # margin from canvas left/right edges
-    INNER_GAP    = 140  # gap between bottles and side tag
-    TRUCK_TOP    = 55   # truck y offset from canvas top (~5.5%)
+    CANVAS       = 1000
+    SIDE_MARGIN  = 90   # left/right canvas margin
+    VERT_MARGIN  = 55   # top/bottom canvas margin
+    TRUCK_TOP    = 55   # truck y offset from canvas top
     PANEL_GAP    = 8    # gap between truck bottom and side tag blue panel
 
     # ── 1. Clean any pre-existing truck ──────────────────────────────────────
     prod = erase_baked_in_truck(product_image.convert("RGBA"))
 
-    # ── 2. Resize product ─────────────────────────────────────────────────────
+    # ── 2. Resize product to fill canvas within margins ───────────────────────
+    max_w = CANVAS - 2 * SIDE_MARGIN
+    max_h = CANVAS - 2 * VERT_MARGIN
     new_size = int(CANVAS * (prod_scale / 100.0) * 0.95)
-    new_size = max(100, min(new_size, CANVAS))
+    new_size = max(100, min(new_size, min(max_w, max_h)))
     prod_resized = prod.resize((new_size, new_size), Image.Resampling.LANCZOS)
 
     # ── 3. Split into bottles + side tag ─────────────────────────────────────
@@ -235,10 +237,11 @@ def composite_image(product_image: Image.Image,
     if tag is None:
         st.warning(f"⚠️ '{FREE_DELIVERY_FILE}' not found next to the app.")
         canvas = Image.new("RGB", (CANVAS, CANVAS), (255, 255, 255))
-        canvas.paste(prod_resized, ((CANVAS - new_size) // 2, (CANVAS - new_size) // 2))
+        cx = (CANVAS - new_size) // 2
+        canvas.paste(prod_resized, (cx, VERT_MARGIN))
         return canvas
 
-    py = (CANVAS - new_size) // 2   # vertical center offset
+    py = VERT_MARGIN   # vertical offset from top
 
     if has_side_tag:
         # Content bounds of each part
@@ -248,12 +251,13 @@ def composite_image(product_image: Image.Image,
         bottles_w  = b_right - b_left
         side_tag_w = s_right - s_left
 
-        # Compute horizontal layout
-        total_w = OUTER_MARGIN + bottles_w + INNER_GAP + side_tag_w + OUTER_MARGIN
-        h_offset = (CANVAS - total_w) // 2
+        # Horizontal layout: SIDE_MARGIN | bottles | auto-gap | side_tag | SIDE_MARGIN
+        # Auto-gap = whatever space remains between the two fixed margins
+        total_fixed = SIDE_MARGIN + bottles_w + side_tag_w + SIDE_MARGIN
+        auto_gap = max(10, CANVAS - total_fixed)
 
-        bx = h_offset + OUTER_MARGIN - b_left
-        sx = bx + b_left + bottles_w + INNER_GAP - s_left
+        bx = SIDE_MARGIN - b_left
+        sx = bx + b_left + bottles_w + auto_gap - s_left
 
         canvas = Image.new("RGBA", (CANVAS, CANVAS), (255, 255, 255, 255))
         canvas.paste(bottles,       (bx, py), bottles)
@@ -289,26 +293,26 @@ def composite_image(product_image: Image.Image,
             tx = abs_str - tag_w + 5
             ty = TRUCK_TOP
         elif position == "Top Left":
-            tx = OUTER_MARGIN
+            tx = SIDE_MARGIN
             ty = TRUCK_TOP
         elif position == "Bottom Right":
-            tx = CANVAS - tag_w - OUTER_MARGIN
-            ty = CANVAS - tag_h - TRUCK_TOP
+            tx = CANVAS - tag_w - SIDE_MARGIN
+            ty = CANVAS - tag_h - VERT_MARGIN
         else:
-            tx = OUTER_MARGIN
-            ty = CANVAS - tag_h - TRUCK_TOP
+            tx = SIDE_MARGIN
+            ty = CANVAS - tag_h - VERT_MARGIN
 
     else:
-        # No side tag — place whole product centred, truck in corner
+        # No side tag — place whole product within margins, truck in corner
         canvas = Image.new("RGBA", (CANVAS, CANVAS), (255, 255, 255, 255))
         canvas.paste(prod_resized, ((CANVAS - new_size) // 2, py), prod_resized)
         tag_w = int(CANVAS * tag_width_pct / 100)
         tag_h = int(tag.height * tag_w / tag.width)
         pos_map = {
-            "Top Right":    (CANVAS - tag_w - OUTER_MARGIN, TRUCK_TOP),
-            "Top Left":     (OUTER_MARGIN, TRUCK_TOP),
-            "Bottom Right": (CANVAS - tag_w - OUTER_MARGIN, CANVAS - tag_h - TRUCK_TOP),
-            "Bottom Left":  (OUTER_MARGIN, CANVAS - tag_h - TRUCK_TOP),
+            "Top Right":    (CANVAS - tag_w - SIDE_MARGIN, TRUCK_TOP),
+            "Top Left":     (SIDE_MARGIN, TRUCK_TOP),
+            "Bottom Right": (CANVAS - tag_w - SIDE_MARGIN, CANVAS - tag_h - VERT_MARGIN),
+            "Bottom Left":  (SIDE_MARGIN, CANVAS - tag_h - VERT_MARGIN),
         }
         tx, ty = pos_map[position]
 
