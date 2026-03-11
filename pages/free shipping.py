@@ -15,8 +15,8 @@ st.set_page_config(
 )
 
 # Title and description
-st.title("Free Delivery Tag")
-
+st.title("Free Delivery Tag Generator")
+st.markdown("Upload a product image and add a **Free Delivery** tag overlay!")
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 st.sidebar.header("Tag Settings")
@@ -239,110 +239,158 @@ def composite_image(product_image: Image.Image,
 
     Layout logic:
     - The product is split into a LEFT part (bottles) and RIGHT part (side tag).
-    - Both are placed with explicit OUTER_MARGIN on the canvas edges and
-      INNER_GAP between them, eliminating the large dead gap.
+    - If a side tag is detected:
+        - Bottles and side tag are scaled so that the bottles' content height is 400px.
+        - Content is positioned with a 300px top and bottom margin on the canvas.
+        - Side tag is shifted down and scaled to fit below the truck tag if they overlap.
+    - If no side tag:
+        - Product scales whole to fill vertical margins.
     - Truck renders at FULL size (side tag width), never shrunk.
-    - If truck overlaps side tag, the side tag is shifted down and scaled to fit.
     """
     CANVAS       = 1000
     SIDE_MARGIN  = 90   # left/right canvas margin
-    VERT_MARGIN  = 55   # top/bottom canvas margin
+    VERT_MARGIN  = 55   # top/bottom canvas margin (for no side tag case)
     TRUCK_TOP    = 55   # truck y offset from canvas top
     PANEL_GAP    = 8    # gap between truck bottom and side tag blue panel
+
+    # User margin constraints for side tag logic
+    TOP_MARGIN_300 = 300
+    BOTTOM_MARGIN_300 = 300
+    TARGET_BOTTLES_CONTENT_H = 400.0  # (1000 - 300 - 300)
 
     # ── 1. Clean any pre-existing truck ──────────────────────────────────────
     prod = erase_baked_in_truck(product_image.convert("RGBA"))
 
-    # ── 2. Resize product to fill canvas within margins ───────────────────────
-    max_w = CANVAS - 2 * SIDE_MARGIN
-    max_h = CANVAS - 2 * VERT_MARGIN
-    new_size = int(CANVAS * (prod_scale / 100.0) * 0.95)
-    new_size = max(100, min(new_size, min(max_w, max_h)))
-    prod_resized = prod.resize((new_size, new_size), Image.Resampling.LANCZOS)
+    # ── 2. Detect & split side tag BEFORE scaling ─────────────────────────────
+    # Work on a provisional 950px resize just for detection and split ratio
+    detect_size = 950
+    prod_detect = prod.resize((detect_size, detect_size), Image.Resampling.LANCZOS)
+    bottles_det, side_tag_det, _ = split_product_and_side_tag(prod_detect)
+    has_side_tag = side_tag_det is not None
 
-    # ── 3. Split into bottles + side tag ─────────────────────────────────────
-    bottles, side_tag_crop, split_x = split_product_and_side_tag(prod_resized)
-    has_side_tag = side_tag_crop is not None
-
-    # ── 4. Load truck tag ─────────────────────────────────────────────────────
+    # ── 3. Load truck tag ─────────────────────────────────────────────────────
     tag = load_free_delivery_tag()
-    if tag is None:
-        st.warning(f"⚠️ '{FREE_DELIVERY_FILE}' not found next to the app.")
-        canvas = Image.new("RGB", (CANVAS, CANVAS), (255, 255, 255))
-        cx = (CANVAS - new_size) // 2
-        canvas.paste(prod_resized, (cx, VERT_MARGIN))
-        return canvas
 
-    py = VERT_MARGIN   # vertical offset from top
+    # ── 4. Scale and layout ───────────────────────────────────────────────────
+    user_factor = prod_scale / 100.0
 
     if has_side_tag:
-        # Content bounds of each part
-        b_left, b_right, b_top, b_bottom = content_bbox(bottles)
-        s_left, s_right, s_top, s_bottom = content_bbox(side_tag_crop)
+        # 4a. Get original unscaled parts and content bboxes
+        orig_h, orig_w = np.array(prod).shape[:2]
+        split_ratio = split_product_and_side_tag(prod_detect)[2] / detect_size
+        orig_split = int(orig_w * split_ratio)
+        bottles_orig = prod.crop((0, 0, orig_split, orig_h))
+        sidetag_orig = prod.crop((orig_split, 0, orig_w, orig_h))
 
-        bottles_w  = b_right - b_left
-        side_tag_w = s_right - s_left
+        b_left_orig, b_right_orig, b_top_orig, b_bottom_orig = content_bbox(bottles_orig)
+        orig_bottles_content_h = max(b_bottom_orig - b_top_orig, 1)
 
-        # Horizontal layout: SIDE_MARGIN | bottles | auto-gap | side_tag | SIDE_MARGIN
-        # Auto-gap = whatever space remains between the two fixed margins
-        total_fixed = SIDE_MARGIN + bottles_w + side_tag_w + SIDE_MARGIN
-        auto_gap = max(10, CANVAS - total_fixed)
+        s_left_orig, s_right_orig, s_top_orig, s_bottom_orig = content_bbox(sidetag_orig)
 
-        bx = SIDE_MARGIN - b_left
-        sx = bx + b_left + bottles_w + auto_gap - s_left
+        # 4b. Target scale based on 400px content height with user factor
+        target_scale = (TARGET_BOTTLES_CONTENT_H / orig_bottles_content_h) * user_factor
 
+        # 4c. Scale parts
+        bottles_scaled = bottles_orig.resize(
+            (max(10, int(bottles_orig.width * target_scale)), max(10, int(orig_h * target_scale))),
+            Image.Resampling.LANCZOS
+        )
+        sidetag_scaled = sidetag_orig.resize(
+            (max(10, int(sidetag_orig.width * target_scale)), max(10, int(orig_h * target_scale))),
+            Image.Resampling.LANCZOS
+        )
+
+        # 4d. Create canvas and paste bottles
         canvas = Image.new("RGBA", (CANVAS, CANVAS), (255, 255, 255, 255))
-        canvas.paste(bottles,       (bx, py), bottles)
-        canvas.paste(side_tag_crop, (sx, py), side_tag_crop)
+        
+        # Central vertical position, content top at TOP_MARGIN_300
+        by = TOP_MARGIN_300 - int(b_top_orig * target_scale)
+        bx = SIDE_MARGIN - int(b_left_orig * target_scale)
+        canvas.paste(bottles_scaled, (bx, by), bottles_scaled)
 
-        # Absolute position of side tag content on canvas
-        abs_stl = sx + s_left
-        abs_str = sx + s_right
-        abs_stt = py + s_top
-        abs_stb = py + s_bottom
+        # 4e. Paste original scaled side tag, top aligned with bottles, content pinned to right margin
+        sy = by
+        sx = CANVAS - SIDE_MARGIN - int(s_right_orig * target_scale)
+        canvas.paste(sidetag_scaled, (sx, sy), sidetag_scaled)
 
-        # Truck: full width = side tag content width
-        truck_w = side_tag_w
-        truck_h = int(tag.height * truck_w / tag.width)
-        truck_bottom = TRUCK_TOP + truck_h
+        if tag is None:
+            st.warning(f"⚠️ '{FREE_DELIVERY_FILE}' not found next to the app.")
+            return canvas.convert("RGB")
 
-        # If truck overlaps side tag: shift side tag down and scale to fit
+        # 4f. Check and handle Truck Tag overlap by shifting/shrinking side tag *only*
+        # Use content bboxes of the *already scaled* side tag
+        st_left, st_right, st_top, st_bottom = content_bbox(sidetag_scaled)
+        abs_stt = sy + st_top
+        abs_stb = sy + st_bottom
+        abs_str = sx + st_right
+
+        # Truck size matches scaled side tag content width
+        tag_w = int((s_right_orig - s_left_orig) * target_scale)
+        tag_h = int(tag.height * tag_w / tag.width)
+        truck_bottom = TRUCK_TOP + tag_h
+
         if truck_bottom + PANEL_GAP > abs_stt:
-            side_crop2 = canvas.crop((abs_stl, abs_stt, abs_str + 1, abs_stb + 1))
-            arr2 = np.array(canvas)
-            arr2[abs_stt:abs_stb + 1, abs_stl:abs_str + 1] = [255, 255, 255, 255]
-            canvas = Image.fromarray(arr2)
-            new_top  = truck_bottom + PANEL_GAP
-            avail_h  = abs_stb - new_top
-            orig_h   = abs_stb - abs_stt
-            sc       = avail_h / max(orig_h, 1)
-            new_w    = int(side_tag_w * sc)
-            side_sc  = side_crop2.resize((new_w, avail_h), Image.Resampling.LANCZOS)
-            canvas.paste(side_sc, (abs_str - new_w, new_top), side_sc)
+            # Overlap! We need to shift and possibly shrink the side tag only.
+            # Side tag content must start here
+            new_st_content_t = truck_bottom + PANEL_GAP
+            
+            # The remaining height to fit content within vertical bounds, capping bottom at abs_stb
+            allowed_st_content_h = abs_stb - new_st_content_t
+            orig_scaled_st_content_h = abs_stb - abs_stt
+            
+            # Calculate a shrink scale factor for the side tag itself
+            shrink_scale = allowed_st_content_h / orig_scaled_st_content_h
 
-        tag_w, tag_h = truck_w, truck_h
-        if position == "Top Right":
-            tx = abs_str - tag_w + 5
-            ty = TRUCK_TOP
-        elif position == "Top Left":
-            tx = SIDE_MARGIN
-            ty = TRUCK_TOP
-        elif position == "Bottom Right":
-            tx = CANVAS - tag_w - SIDE_MARGIN
-            ty = CANVAS - tag_h - VERT_MARGIN
-        else:
-            tx = SIDE_MARGIN
-            ty = CANVAS - tag_h - VERT_MARGIN
+            # We need to erase and re-paste
+            # Erase original side tag by pasting a white rectangle
+            err_arr = np.array(canvas)
+            s_l_img, s_r_img, s_t_img, s_b_img = content_bbox(sidetag_scaled)
+            err_arr[sy:sy+sidetag_scaled.height, sx:sx+sidetag_scaled.width] = [255, 255, 255, 255]
+            canvas = Image.fromarray(err_arr)
+
+            # Re-scale original side tag image
+            new_st_image_scale = target_scale * shrink_scale
+            sidetag_rescaled = sidetag_orig.resize(
+                (max(10, int(sidetag_orig.width * new_st_image_scale)), max(10, int(orig_h * new_st_image_scale))),
+                Image.Resampling.LANCZOS
+            )
+
+            # Re-calculate positions and re-paste
+            # Content top must be at new_st_content_t
+            sy = new_st_content_t - int(s_top_orig * new_st_image_scale)
+            # Use content_bbox on rescaled to ensure sx is correct
+            str_new = int(s_right_orig * new_st_image_scale)
+            sx = CANVAS - SIDE_MARGIN - str_new
+            canvas.paste(sidetag_rescaled, (sx, sy), sidetag_rescaled)
+            
+            # Use content_bbox on rescaled to get absolute bounds for tag placement
+            st_l_r, st_r_r, st_t_r, st_b_r = content_bbox(sidetag_rescaled)
+            abs_str = sx + st_r_r
+
+        # 4g. Place tag in correct position
+        tx, ty = abs_str - tag_w + 5, TRUCK_TOP
 
     else:
-        # No side tag — place whole product within margins, truck in corner
+        # No side tag — scale whole product to fill vertical margins
+        prod_scaled, paste_y = scale_to_fill_vertical(prod, CANVAS, VERT_MARGIN)
+        pw = max(50, int(prod_scaled.width  * user_factor))
+        ph = max(50, int(prod_scaled.height * user_factor))
+        prod_resized = prod_scaled.resize((pw, ph), Image.Resampling.LANCZOS)
+        py = int(paste_y * user_factor) if user_factor != 1.0 else paste_y
+
         canvas = Image.new("RGBA", (CANVAS, CANVAS), (255, 255, 255, 255))
-        canvas.paste(prod_resized, ((CANVAS - new_size) // 2, py), prod_resized)
+        cx = (CANVAS - prod_resized.width) // 2
+        canvas.paste(prod_resized, (cx, py), prod_resized)
+
+        if tag is None:
+            st.warning(f"⚠️ '{FREE_DELIVERY_FILE}' not found next to the app.")
+            return canvas.convert("RGB")
+
         tag_w = int(CANVAS * tag_width_pct / 100)
         tag_h = int(tag.height * tag_w / tag.width)
         pos_map = {
             "Top Right":    (CANVAS - tag_w - SIDE_MARGIN, TRUCK_TOP),
-            "Top Left":     (SIDE_MARGIN, TRUCK_TOP),
+            "Top Left":      (SIDE_MARGIN, TRUCK_TOP),
             "Bottom Right": (CANVAS - tag_w - SIDE_MARGIN, CANVAS - tag_h - VERT_MARGIN),
             "Bottom Left":  (SIDE_MARGIN, CANVAS - tag_h - VERT_MARGIN),
         }
