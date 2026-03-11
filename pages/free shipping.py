@@ -213,9 +213,10 @@ def composite_image(product_image: Image.Image,
     - If truck overlaps side tag, the side tag is shifted down and scaled to fit.
     """
     CANVAS = 1000
-    OUTER_MARGIN = 30   # margin from canvas left/right edges
-    INNER_GAP    = 20   # gap between bottles and side tag
-    TRUCK_MARGIN = 12   # margin from canvas top for truck
+    OUTER_MARGIN = 90   # margin from canvas left/right edges
+    INNER_GAP    = 140  # gap between bottles and side tag
+    TRUCK_TOP    = 55   # truck y offset from canvas top (~5.5%)
+    PANEL_GAP    = 8    # gap between truck bottom and side tag blue panel
 
     # ── 1. Clean any pre-existing truck ──────────────────────────────────────
     prod = erase_baked_in_truck(product_image.convert("RGBA"))
@@ -267,15 +268,15 @@ def composite_image(product_image: Image.Image,
         # Truck: full width = side tag content width
         truck_w = side_tag_w
         truck_h = int(tag.height * truck_w / tag.width)
-        truck_bottom = TRUCK_MARGIN + truck_h
+        truck_bottom = TRUCK_TOP + truck_h
 
         # If truck overlaps side tag: shift side tag down and scale to fit
-        if truck_bottom + 4 > abs_stt:
+        if truck_bottom + PANEL_GAP > abs_stt:
             side_crop2 = canvas.crop((abs_stl, abs_stt, abs_str + 1, abs_stb + 1))
             arr2 = np.array(canvas)
             arr2[abs_stt:abs_stb + 1, abs_stl:abs_str + 1] = [255, 255, 255, 255]
             canvas = Image.fromarray(arr2)
-            new_top  = truck_bottom + 4
+            new_top  = truck_bottom + PANEL_GAP
             avail_h  = abs_stb - new_top
             orig_h   = abs_stb - abs_stt
             sc       = avail_h / max(orig_h, 1)
@@ -286,16 +287,16 @@ def composite_image(product_image: Image.Image,
         tag_w, tag_h = truck_w, truck_h
         if position == "Top Right":
             tx = abs_str - tag_w + 5
-            ty = TRUCK_MARGIN
+            ty = TRUCK_TOP
         elif position == "Top Left":
             tx = OUTER_MARGIN
-            ty = TRUCK_MARGIN
+            ty = TRUCK_TOP
         elif position == "Bottom Right":
             tx = CANVAS - tag_w - OUTER_MARGIN
-            ty = CANVAS - tag_h - TRUCK_MARGIN
+            ty = CANVAS - tag_h - TRUCK_TOP
         else:
             tx = OUTER_MARGIN
-            ty = CANVAS - tag_h - TRUCK_MARGIN
+            ty = CANVAS - tag_h - TRUCK_TOP
 
     else:
         # No side tag — place whole product centred, truck in corner
@@ -304,10 +305,10 @@ def composite_image(product_image: Image.Image,
         tag_w = int(CANVAS * tag_width_pct / 100)
         tag_h = int(tag.height * tag_w / tag.width)
         pos_map = {
-            "Top Right":    (CANVAS - tag_w - OUTER_MARGIN, TRUCK_MARGIN),
-            "Top Left":     (OUTER_MARGIN, TRUCK_MARGIN),
-            "Bottom Right": (CANVAS - tag_w - OUTER_MARGIN, CANVAS - tag_h - TRUCK_MARGIN),
-            "Bottom Left":  (OUTER_MARGIN, CANVAS - tag_h - TRUCK_MARGIN),
+            "Top Right":    (CANVAS - tag_w - OUTER_MARGIN, TRUCK_TOP),
+            "Top Left":     (OUTER_MARGIN, TRUCK_TOP),
+            "Bottom Right": (CANVAS - tag_w - OUTER_MARGIN, CANVAS - tag_h - TRUCK_TOP),
+            "Bottom Left":  (OUTER_MARGIN, CANVAS - tag_h - TRUCK_TOP),
         }
         tx, ty = pos_map[position]
 
