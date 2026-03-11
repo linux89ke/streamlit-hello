@@ -187,13 +187,14 @@ def composite_image(product_image: Image.Image,
     # ── 1. Clean any pre-existing truck ──────────────────────────────────────
     prod = erase_baked_in_truck(product_image.convert("RGBA"))
 
-    # ── 2. Place product on canvas ────────────────────────────────────────────
+    # ── 2. Place product on canvas (shifted slightly right for left margin) ──
     canvas = Image.new("RGBA", (CANVAS, CANVAS), (255, 255, 255, 255))
     new_size = int(CANVAS * (prod_scale / 100.0) * 0.95)
     new_size = max(100, min(new_size, CANVAS))
     prod_resized = prod.resize((new_size, new_size), Image.Resampling.LANCZOS)
-    px = (CANVAS - new_size) // 2
+    px = (CANVAS - new_size) // 2 + 15   # shift right to create left margin
     py = (CANVAS - new_size) // 2
+    px = max(0, min(px, CANVAS - new_size))
     canvas.paste(prod_resized, (px, py), prod_resized)
 
     # ── 3. Load truck tag ─────────────────────────────────────────────────────
@@ -217,13 +218,20 @@ def composite_image(product_image: Image.Image,
         side_tag_top   = MARGIN
 
     # ── 5. Size & position the truck ──────────────────────────────────────────
-    tag_w = side_tag_w
-    tag_h = int(tag.height * tag_w / tag.width)
+    # Size truck to fill the white space ABOVE the side tag (no overlap)
+    avail_h = side_tag_top - MARGIN        # available height above side tag
+    tag_h = max(40, avail_h - 2)           # fill it, leave 2px gap
+    tag_w = int(tag.width * tag_h / tag.height)
+    max_w = side_tag_w + 20               # cap at side tag width + small overhang
+    if tag_w > max_w:
+        tag_w = max_w
+        tag_h = int(tag.height * tag_w / tag.width)
     tag_resized = tag.resize((tag_w, tag_h), Image.Resampling.LANCZOS)
 
     if position == "Top Right":
         tx = side_tag_right - tag_w + 5   # right-align with side tag
-        ty = max(MARGIN, side_tag_top - tag_h + 8)  # sit just above side tag top
+        ty = side_tag_top - tag_h - 2     # sit strictly above side tag, no overlap
+        if ty < MARGIN: ty = MARGIN
     elif position == "Top Left":
         tx = MARGIN
         ty = MARGIN
