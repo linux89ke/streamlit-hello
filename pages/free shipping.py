@@ -463,7 +463,7 @@ def search_jumia_by_sku(sku, base_url, search_url):
             return None
         if "There are no results for" in driver.page_source or \
                 "No results found" in driver.page_source:
-            st.warning(f"No products found for SKU: {sku}")
+            # We don't warning here anymore as we handle it cleanly in the bulk loop
             return None
         try:
             product_links = driver.find_elements(By.CSS_SELECTOR, "article.prd a.core")
@@ -503,16 +503,12 @@ def search_jumia_by_sku(sku, base_url, search_url):
                     img_response.raise_for_status()
                     return Image.open(BytesIO(img_response.content)).convert("RGBA")
                 else:
-                    st.warning("Found product but could not extract image")
                     return None
             else:
-                st.warning(f"No products found for SKU: {sku}")
                 return None
-        except Exception as e:
-            st.error(f"Error finding product: {str(e)}")
+        except Exception:
             return None
-    except Exception as e:
-        st.error(f"Error: {str(e)}")
+    except Exception:
         return None
     finally:
         if driver:
@@ -565,7 +561,7 @@ if processing_mode == "Single Image":
         else:  # Load from SKU
             sku_input = st.text_input(
                 "Enter Product SKU:",
-                placeholder="e.g., GE840EA6C62GANAFAMZ"
+                placeholder="e.g., GE840EA6C62GANAFAMZ-269939913"
             )
             jumia_site = st.radio(
                 "Select Jumia Site:",
@@ -573,23 +569,25 @@ if processing_mode == "Single Image":
                 horizontal=True
             )
             if sku_input:
+                base_sku = sku_input.split('-')[0].strip()
                 if jumia_site == "Jumia Kenya":
                     base_url = "https://www.jumia.co.ke"
-                    search_url = f"https://www.jumia.co.ke/catalog/?q={sku_input}"
+                    search_url = f"https://www.jumia.co.ke/catalog/?q={base_sku}"
                 else:
                     base_url = "https://www.jumia.ug"
-                    search_url = f"https://www.jumia.ug/catalog/?q={sku_input}"
+                    search_url = f"https://www.jumia.ug/catalog/?q={base_sku}"
+                
                 if st.button("Search and Extract Image", use_container_width=True):
-                    with st.spinner(f"Searching {jumia_site} for SKU…"):
-                        sku_hash = f"{sku_input}_{jumia_site}"
+                    with st.spinner(f"Searching {jumia_site} for SKU: {base_sku}…"):
+                        sku_hash = f"{base_sku}_{jumia_site}"
                         if st.session_state.last_image_hash != sku_hash:
                             st.session_state.last_image_hash = sku_hash
                             st.session_state.image_scale_value = 100
-                        product_image = search_jumia_by_sku(sku_input, base_url, search_url)
+                        product_image = search_jumia_by_sku(base_sku, base_url, search_url)
                         if product_image:
                             st.success("Image found and loaded!")
                         else:
-                            st.error("Could not find product with this SKU")
+                            st.error(f"Could not find product for SKU: {base_sku}")
 
     with col2:
         st.subheader("Preview")
@@ -611,10 +609,17 @@ if processing_mode == "Single Image":
                 result_image.save(buf, format="JPEG", quality=95)
                 buf.seek(0)
 
+                # Set proper filename based on SKU if available
+                if upload_method == "Load from SKU" and sku_input:
+                    base_sku = sku_input.split('-')[0].strip()
+                    dl_filename = f"{base_sku}_1.jpg"
+                else:
+                    dl_filename = f"free_delivery_{tag_position.lower().replace(' ', '_')}.jpg"
+
                 st.download_button(
                     label="⬇️ Download Tagged Image (JPEG)",
                     data=buf,
-                    file_name=f"free_delivery_{tag_position.lower().replace(' ', '_')}.jpg",
+                    file_name=dl_filename,
                     mime="image/jpeg",
                     use_container_width=True
                 )
@@ -637,6 +642,7 @@ else:
     )
 
     products_to_process = []   # list of (image, filename)
+    failed_items = []          # Track whatever failed to load
 
     if bulk_method == "Upload multiple images":
         uploaded_files = st.file_uploader(
@@ -651,7 +657,7 @@ else:
                     img = Image.open(uf).convert("RGBA")
                     products_to_process.append((img, uf.name.rsplit('.', 1)[0]))
                 except Exception as e:
-                    st.warning(f"Could not load {uf.name}: {e}")
+                    failed_items.append(uf.name)
 
     elif bulk_method == "Enter URLs manually":
         urls_input = st.text_area(
@@ -668,11 +674,11 @@ else:
                     img = Image.open(BytesIO(response.content)).convert("RGBA")
                     products_to_process.append((img, f"image_{idx+1}"))
                 except Exception as e:
-                    st.warning(f"Could not load {url}: {e}")
+                    failed_items.append(url)
 
     elif bulk_method == "Upload Excel file with URLs":
         st.markdown("""
-        **Excel format:** Column A = Image URLs, Column B = Product names (optional)
+        **Excel format:** Column A = Image URLs, Column B = Product names/SKUs (optional)
         """)
         excel_file = st.file_uploader("Upload Excel file", type=["xlsx", "xls"])
         if excel_file:
@@ -687,15 +693,18 @@ else:
                     st.info(f"Found {len(urls)} URLs")
                     for idx, (url, name) in enumerate(zip(urls, names)):
                         try:
+                            # Clean up the SKU name by removing everything after the hyphen
+                            base_name = str(name).split('-')[0].strip()
+                            clean_name = re.sub(r'[^\w\s]', '', base_name).strip().replace(' ', '_')
+                            
                             response = requests.get(url, timeout=10)
                             response.raise_for_status()
                             img = Image.open(BytesIO(response.content)).convert("RGBA")
-                            clean_name = re.sub(r'[^\w\s-]', '', name).strip().replace(' ', '_')
                             products_to_process.append(
                                 (img, clean_name or f"product_{idx+1}")
                             )
                         except Exception as e:
-                            st.warning(f"Could not load {name}: {e}")
+                            failed_items.append(name)
                 else:
                     st.error("Excel file appears to be empty")
             except Exception as e:
@@ -704,7 +713,7 @@ else:
     else:  # Enter SKUs
         skus_input = st.text_area(
             "Enter Product SKUs (one per line):", height=200,
-            placeholder="GE840EA6C62GANAFAMZ\nAP456EA7D89HANAFAMZ"
+            placeholder="GE840EA6C62GANAFAMZ-269939913\nAP456EA7D89HANAFAMZ"
         )
         jumia_site_bulk = st.radio(
             "Select Jumia Site:",
@@ -721,22 +730,53 @@ else:
                 progress = st.progress(0)
                 status_text = st.empty()
                 for idx, sku in enumerate(skus):
-                    status_text.text(f"Processing SKU {idx+1}/{len(skus)}: {sku}")
-                    search_url = f"{base_url}/catalog/?q={sku}"
-                    img = search_jumia_by_sku(sku, base_url, search_url)
+                    # Clean the SKU (remove anything after hyphen)
+                    base_sku = sku.split('-')[0].strip()
+                    
+                    status_text.text(f"Processing SKU {idx+1}/{len(skus)}: {base_sku}")
+                    search_url = f"{base_url}/catalog/?q={base_sku}"
+                    img = search_jumia_by_sku(base_sku, base_url, search_url)
+                    
                     if img:
-                        products_to_process.append((img, sku))
+                        products_to_process.append((img, base_sku))
                     else:
-                        st.warning(f"Could not find image for SKU: {sku}")
+                        failed_items.append(sku)
+                        
                     progress.progress((idx + 1) / len(skus))
                 status_text.text(
                     f"Done! Found {len(products_to_process)} of {len(skus)} images"
                 )
 
+    # Show failures if any exist
+    if failed_items:
+        st.error(f"⚠️ Could not find or load {len(failed_items)} items:")
+        with st.expander("View failed items"):
+            for item in failed_items:
+                st.write(f"- {item}")
+
     # ── Review & process ──────────────────────────────────────────────────────
     if products_to_process:
         st.markdown("---")
         st.subheader("Review and Adjust Images")
+        
+        # Original Images Download Button
+        import zipfile
+        orig_zip_buffer = BytesIO()
+        with zipfile.ZipFile(orig_zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for img, name in products_to_process:
+                img_buf = BytesIO()
+                img.convert("RGB").save(img_buf, format='JPEG', quality=95)
+                zf.writestr(f"{name}_original.jpg", img_buf.getvalue())
+        orig_zip_buffer.seek(0)
+        
+        st.download_button(
+            label=f"📦 Download All {len(products_to_process)} ORIGINAL Extracted Images (ZIP)",
+            data=orig_zip_buffer,
+            file_name="original_extracted_images.zip",
+            mime="application/zip",
+            help="Download the unedited, original images before any tags are applied."
+        )
+        
         st.info(f"Loaded {len(products_to_process)} images. Adjust sizes before processing.")
 
         if 'individual_scales' not in st.session_state:
@@ -765,7 +805,7 @@ else:
                         st.caption(f"{scale}%")
 
         st.markdown("---")
-        if st.button("Process All Images", use_container_width=True):
+        if st.button("Process All Images with Tag", use_container_width=True):
             st.info(f"Processing {len(products_to_process)} images…")
             progress_bar = st.progress(0)
             processed_images = []
@@ -789,7 +829,6 @@ else:
                 st.markdown("---")
                 st.success(f"Successfully processed {len(processed_images)} images!")
 
-                import zipfile
                 zip_buffer = BytesIO()
                 with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
                     for img, name in processed_images:
@@ -799,7 +838,7 @@ else:
                 zip_buffer.seek(0)
 
                 st.download_button(
-                    label=f"⬇️ Download All {len(processed_images)} Images (ZIP)",
+                    label=f"⬇️ Download All {len(processed_images)} Processed Images (ZIP)",
                     data=zip_buffer,
                     file_name=f"free_delivery_{tag_position.lower().replace(' ', '_')}.zip",
                     mime="application/zip",
