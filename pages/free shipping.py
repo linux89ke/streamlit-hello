@@ -9,14 +9,14 @@ from bs4 import BeautifulSoup
 
 # Page config
 st.set_page_config(
-    page_title="Free Delivery tag",
-
+    page_title="Free Delivery Tag Generator",
+    page_icon="🚚",
     layout="wide"
 )
 
 # Title and description
-st.title("Free Delivery Tag")
-
+st.title("Free Delivery Tag Generator")
+st.markdown("Upload a product image and add a **Free Delivery** tag overlay!")
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 st.sidebar.header("Tag Settings")
@@ -109,46 +109,132 @@ def load_free_delivery_tag():
     return cropped
 
 
+def erase_baked_in_truck(image: Image.Image) -> Image.Image:
+    """
+    Detect and white-out any baked-in orange Free Delivery truck in the image.
+    Orange is identified as R>180, G 80-160, B<80.
+    Returns a copy with the truck area replaced by white.
+    """
+    arr = np.array(image.convert("RGBA"))
+    orange = (
+        (arr[:, :, 0] > 180) &
+        (arr[:, :, 1] > 80)  & (arr[:, :, 1] < 160) &
+        (arr[:, :, 2] < 80)
+    )
+    if not np.any(orange):
+        return image  # nothing to erase
+
+    ys, xs = np.where(orange)
+    y1, y2 = max(0, ys.min() - 12), min(arr.shape[0], ys.max() + 12)
+    x1, x2 = max(0, xs.min() - 12), min(arr.shape[1], xs.max() + 12)
+    arr[y1:y2, x1:x2] = [255, 255, 255, 255]
+    return Image.fromarray(arr)
+
+
+def detect_side_tag(canvas_arr: np.ndarray, canvas_size: int):
+    """
+    Detect a vertical info/product tag on the right side of the canvas.
+    Identifies columns that have >45% non-white pixels (tall, dense content).
+    Returns (left_x, right_x, top_y) or None if not found.
+    """
+    CANVAS = canvas_size
+    h = CANVAS
+    side_tag_left = None
+    for x in range(int(CANVAS * 0.60), CANVAS):
+        col = canvas_arr[:, x, :3]
+        nw = int(np.sum((col[:, 0] < 240) | (col[:, 1] < 240) | (col[:, 2] < 240)))
+        if nw > h * 0.45:
+            side_tag_left = x
+            break
+    if side_tag_left is None:
+        return None
+
+    side_tag_right = CANVAS - 1
+    for rx in range(CANVAS - 1, side_tag_left, -1):
+        col = canvas_arr[:, rx, :3]
+        nw = int(np.sum((col[:, 0] < 240) | (col[:, 1] < 240) | (col[:, 2] < 240)))
+        if nw > h * 0.25:
+            side_tag_right = rx
+            break
+
+    mid_x = (side_tag_left + side_tag_right) // 2
+    side_tag_top = 0
+    for y in range(0, CANVAS // 2):
+        r, g, b = int(canvas_arr[y, mid_x, 0]), int(canvas_arr[y, mid_x, 1]), int(canvas_arr[y, mid_x, 2])
+        if r < 240 or g < 240 or b < 240:
+            side_tag_top = y
+            break
+
+    return side_tag_left, side_tag_right, side_tag_top
+
+
 def composite_image(product_image: Image.Image,
                     position: str,
                     prod_scale: int,
                     tag_width_pct: int) -> Image.Image:
     """
-    Place product_image on a 1000×1000 white canvas and overlay
-    the Free Delivery tag in the chosen corner.
+    Place product_image on a 1000×1000 white canvas and overlay the Free Delivery tag.
+
+    - Any truck already baked into the product image is erased first.
+    - For 'Top Right': truck auto-aligns with any right-side info tag present,
+      sitting just above it and right-aligned to it.
+    - For other corners: standard margin-based placement.
+    - prod_scale (50-150) controls how much of the canvas the product fills.
     """
     CANVAS = 1000
-    MARGIN = 12          # px gap from edge for tag
+    MARGIN = 12
+
+    # ── 1. Clean any pre-existing truck ──────────────────────────────────────
+    prod = erase_baked_in_truck(product_image.convert("RGBA"))
+
+    # ── 2. Place product on canvas ────────────────────────────────────────────
     canvas = Image.new("RGBA", (CANVAS, CANVAS), (255, 255, 255, 255))
+    new_size = int(CANVAS * (prod_scale / 100.0) * 0.95)
+    new_size = max(100, min(new_size, CANVAS))
+    prod_resized = prod.resize((new_size, new_size), Image.Resampling.LANCZOS)
+    px = (CANVAS - new_size) // 2
+    py = (CANVAS - new_size) // 2
+    canvas.paste(prod_resized, (px, py), prod_resized)
 
-    # ── Resize product ────────────────────────────────────────────────────────
-    max_size = int(CANVAS * (prod_scale / 100) * 0.92)
-    prod = product_image.convert("RGBA").copy()
-    prod.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
-    px = (CANVAS - prod.width) // 2
-    py = (CANVAS - prod.height) // 2
-    canvas.paste(prod, (px, py), prod)
-
-    # ── Overlay Free Delivery tag ─────────────────────────────────────────────
+    # ── 3. Load truck tag ─────────────────────────────────────────────────────
     tag = load_free_delivery_tag()
     if tag is None:
         st.warning(f"⚠️ '{FREE_DELIVERY_FILE}' not found next to the app. "
                    "Place it in the same folder as app.py.")
         return canvas.convert("RGB")
 
-    tag_w = int(CANVAS * tag_width_pct / 100)
+    # ── 4. Detect right-side info tag & determine placement ──────────────────
+    canvas_arr = np.array(canvas)
+    side_result = detect_side_tag(canvas_arr, CANVAS)
+
+    if side_result:
+        side_tag_left, side_tag_right, side_tag_top = side_result
+        side_tag_w = side_tag_right - side_tag_left
+    else:
+        side_tag_left  = CANVAS - int(CANVAS * tag_width_pct / 100) - MARGIN
+        side_tag_right = CANVAS - MARGIN
+        side_tag_w     = side_tag_right - side_tag_left
+        side_tag_top   = MARGIN
+
+    # ── 5. Size & position the truck ──────────────────────────────────────────
+    tag_w = side_tag_w
     tag_h = int(tag.height * tag_w / tag.width)
     tag_resized = tag.resize((tag_w, tag_h), Image.Resampling.LANCZOS)
 
-    pos_map = {
-        "Top Right":    (CANVAS - tag_w - MARGIN, MARGIN),
-        "Top Left":     (MARGIN, MARGIN),
-        "Bottom Right": (CANVAS - tag_w - MARGIN, CANVAS - tag_h - MARGIN),
-        "Bottom Left":  (MARGIN, CANVAS - tag_h - MARGIN),
-    }
-    tx, ty = pos_map[position]
-    canvas.paste(tag_resized, (tx, ty), tag_resized)
+    if position == "Top Right":
+        tx = side_tag_right - tag_w + 5   # right-align with side tag
+        ty = max(MARGIN, side_tag_top - tag_h + 8)  # sit just above side tag top
+    elif position == "Top Left":
+        tx = MARGIN
+        ty = MARGIN
+    elif position == "Bottom Right":
+        tx = CANVAS - tag_w - MARGIN
+        ty = CANVAS - tag_h - MARGIN
+    else:  # Bottom Left
+        tx = MARGIN
+        ty = CANVAS - tag_h - MARGIN
 
+    canvas.paste(tag_resized, (tx, ty), tag_resized)
     return canvas.convert("RGB")
 
 
