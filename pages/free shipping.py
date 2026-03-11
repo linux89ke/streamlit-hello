@@ -15,8 +15,8 @@ st.set_page_config(
 )
 
 # Title and description
-st.title("Free Delivery Tag Generator")
-st.markdown("Upload a product image and add a **Free Delivery** tag overlay!")
+st.title("Free Delivery Tag")
+
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 st.sidebar.header("Tag Settings")
