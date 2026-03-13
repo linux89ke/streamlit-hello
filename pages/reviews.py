@@ -288,11 +288,7 @@ def main():
 
     if csv_file is None:
         st.info("Upload a reviews CSV above to get started.")
-        st.markdown(
-            "**Expected columns:** `ID, Review Title, Review Detail Text, "
-            "Customer Nickname, Customer Email, SKU, Seller Name, Status, "
-            "Created Date, Updated Date, Rating`"
-        )
+       
         return
 
     auto_apply, show_approved = get_settings()
