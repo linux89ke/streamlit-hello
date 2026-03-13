@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 #  PAGE CONFIG
 # ══════════════════════════════════════════════════════════════════════════════
 st.set_page_config(
-    page_title="Jumia Refurbished Suite",
+    page_title="Jumia Product Analyzer",
     page_icon=":material/label:",
     layout="wide"
 )
@@ -130,7 +130,7 @@ h2::after { content: ''; display: block; width: 48px; height: 3px; background: #
   <div class="jumia-logo-dot">🏷</div>
   <div>
     <h1>Jumia Product Analyzer</h1>
-    <p>Analyze listings &nbsp;·&nbsp; Extract product specs &nbsp;·&nbsp; Verify Authorized Sellers</p>
+    <p>Analyze listings &nbsp;·&nbsp; Extract product specs &nbsp;·&nbsp; Detect Official Store & Promo Badges</p>
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -208,53 +208,6 @@ with st.sidebar:
     st.info(f"{max_workers} workers · {timeout_seconds}s timeout", icon=":material/bolt:")
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  FILE RESOLUTION & SELLER AUTH CACHING
-# ══════════════════════════════════════════════════════════════════════════════
-def get_tag_path(filename: str) -> str:
-    for path in [filename, os.path.join(os.path.dirname(__file__), filename), os.path.join(os.getcwd(), filename)]:
-        if os.path.exists(path):
-            return path
-    return filename
-
-@st.cache_data(ttl=3600)
-def load_seller_auth_data():
-    """Loads Authorized Seller & Category mappings directly from Refurb.xlsx."""
-    cat_mapping = {}
-    auth_sellers = {cc: {"Phones": set(), "Laptops": set()} for cc in ["KE", "UG", "NG", "MA", "GH"]}
-    
-    try:
-        xl_path = get_tag_path("Refurb.xlsx")
-        if not os.path.exists(xl_path):
-            return cat_mapping, auth_sellers
-            
-        df_cat = pd.read_excel(xl_path, sheet_name="Categories")
-        for _, row in df_cat.iterrows():
-            if pd.notna(row.get('Path')) and pd.notna(row.get('type')):
-                raw_path = str(row['Path'])
-                norm_path = re.sub(r'\s*/\s*', '>', raw_path).replace(' ', '').lower()
-                cat_mapping[norm_path] = str(row['type']).strip()
-                
-        for cc in ["KE", "UG", "NG", "MA", "GH"]:
-            try:
-                df_s = pd.read_excel(xl_path, sheet_name=cc)
-                if 'Phones' in df_s.columns:
-                    auth_sellers[cc]["Phones"] = set(df_s['Phones'].dropna().astype(str).str.strip().str.lower())
-                if 'Laptops' in df_s.columns:
-                    auth_sellers[cc]["Laptops"] = set(df_s['Laptops'].dropna().astype(str).str.strip().str.lower())
-            except Exception:
-                pass
-                
-    except Exception as e:
-        st.warning(f"Could not load seller auth data: {e}")
-        
-    return cat_mapping, auth_sellers
-
-with st.sidebar:
-    if st.button("Reload Seller Data", icon=":material/refresh:", use_container_width=True):
-        load_seller_auth_data.clear()
-        st.rerun()
-
-# ══════════════════════════════════════════════════════════════════════════════
 #  BROWSER DRIVER
 # ══════════════════════════════════════════════════════════════════════════════
 @st.cache_resource
@@ -314,7 +267,7 @@ def get_driver(headless: bool = True, timeout: int = 20):
     return driver
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  ANALYZER — WARRANTY / REFURB / SELLER / SKU / BADGES
+#  ANALYZER — WARRANTY / SELLER / SKU / BADGES
 # ══════════════════════════════════════════════════════════════════════════════
 def extract_warranty_info(soup, product_name: str) -> dict:
     data = {"has_warranty":"NO","warranty_duration":"N/A", "warranty_source":"None","warranty_details":"","warranty_address":"N/A"}
@@ -359,64 +312,6 @@ def extract_warranty_info(soup, product_name: str) -> dict:
                         data.update({"has_warranty":"YES", "warranty_duration":f"{m.group(1)} {unit}", "warranty_source":"Specifications", "warranty_details":text.strip()[:100]})
                         break
                 if data["has_warranty"] == "YES": break
-    return data
-
-def detect_refurbished_status(soup, product_name: str) -> dict:
-    data = {"is_refurbished":"NO","refurb_indicators":[],"has_refurb_tag":"NO"}
-    kws  = ["refurbished","renewed","refurb","recon","reconditioned", "ex-uk","ex uk","pre-owned","certified","restored"]
-    scope = soup
-    h1    = soup.find("h1")
-    if h1:
-        c = h1.find_parent("div", class_=re.compile(r"col10|-pvs|-p"))
-        scope = c if c else h1.parent.parent
-
-    if scope.find("a", href=re.compile(r"/all-products/\?tag=REFU", re.I)):
-        data.update({"is_refurbished":"YES","has_refurb_tag":"YES"})
-        data["refurb_indicators"].append("REFU tag badge")
-
-    ri = scope.find("img", attrs={"alt": re.compile(r"^REFU$", re.I)})
-    if ri:
-        p = ri.parent
-        if p and p.name == "a" and "tag=REFU" in p.get("href",""):
-            if "REFU tag badge" not in data["refurb_indicators"]:
-                data.update({"is_refurbished":"YES","has_refurb_tag":"YES"})
-                data["refurb_indicators"].append("REFU badge image")
-
-    for crumb in soup.find_all(["a","span"], class_=re.compile(r"breadcrumb|brcb")):
-        if "renewed" in crumb.get_text().lower():
-            data["is_refurbished"] = "YES"
-            data["refurb_indicators"].append('Breadcrumb: "Renewed"')
-            break
-
-    for kw in kws:
-        if kw in product_name.lower():
-            data["is_refurbished"] = "YES"
-            ind = f'Title: "{kw}"'
-            if ind not in data["refurb_indicators"]:
-                data["refurb_indicators"].append(ind)
-
-    for badge in [
-        scope.find(["span","div"], class_=re.compile(r"refurb|renewed", re.I)),
-        scope.find(["span","div"], string=re.compile(r"REFURBISHED|RENEWED", re.I)),
-        scope.find("img", attrs={"alt": re.compile(r"refurb|renewed", re.I)}),
-    ]:
-        if badge:
-            data["is_refurbished"] = "YES"
-            if "Refurbished badge" not in data["refurb_indicators"]:
-                data["refurb_indicators"].append("Refurbished badge")
-            break
-
-    page_text = (scope if scope != soup else soup).get_text()[:3000]
-    for pat in [
-        r"condition[:\s]*(renewed|refurbished|excellent|good|like new|grade [a-c])",
-        r"(renewed|refurbished)[,\s]*(no scratches|excellent|good condition|like new)",
-        r"product condition[:\s]*([^\n]+)",
-    ]:
-        m = re.search(pat, page_text, re.I)
-        if m:
-            if data["is_refurbished"] == "NO" and any(k in m.group(0).lower() for k in kws): data["is_refurbished"] = "YES"
-            if "Condition statement" not in data["refurb_indicators"]: data["refurb_indicators"].append("Condition statement")
-            break
     return data
 
 def extract_seller_info(soup) -> dict:
@@ -527,7 +422,7 @@ def extract_product_data(soup, data: dict, is_sku: bool, target: dict, country_c
     data["Total Product Images"] = 0
     data["Image URLs"] = []
 
-    # Get primary image and total counts for output, without downloading them
+    # Get primary image and total counts for output
     gallery = soup.find("div", id="imgs") or soup.find("div", class_=re.compile(r"\bsldr\b|\bgallery\b|-pas", re.I))
     scope = gallery if gallery else soup
     image_url = None
@@ -542,55 +437,17 @@ def extract_product_data(soup, data: dict, is_sku: bool, target: dict, country_c
     data["Primary Image URL"] = image_url or "N/A"
     data["Total Product Images"] = len(data["Image URLs"])
 
-    rs = detect_refurbished_status(soup, product_name)
-    data["Title has Refurbished"] = rs["is_refurbished"]
-    data["Has refurb tag"]        = rs["has_refurb_tag"]
-    data["Refurbished Indicators"] = ", ".join(rs["refurb_indicators"]) or "None"
-    if data["Brand"] == "Renewed":
-        data["Title has Refurbished"] = "YES"
-
     # ── Official Store & Tech week deal Detection ──
     data["Official Store"] = "NO"
     data["Tech week deal"] = "NO"
 
-    # Iterate tags near top where badges usually reside, or scan them generally
+    # Iterate tags near top where badges usually reside
     for el in soup.find_all(["span", "div", "a", "img"]):
         text = el.get_text(strip=True).lower() if el.name != "img" else (el.get("alt") or "").lower()
         if "official store" in text and len(text) < 25:
             data["Official Store"] = "YES"
         if "tech week deal" in text and len(text) < 25:
             data["Tech week deal"] = "YES"
-
-    # ── Seller Authorization Check ──
-    cat_mapping, auth_sellers = load_seller_auth_data()
-
-    norm_cat = data["Category"].replace(' > ', '>').replace(' ', '').lower()
-    prod_type = cat_mapping.get(norm_cat)
-
-    if not prod_type:
-        for p, t in cat_mapping.items():
-            if p in norm_cat or norm_cat in p:
-                prod_type = t
-                break
-
-    if not prod_type:
-        if any(kw in norm_cat for kw in ["computing", "laptop", "macbook", "pc"]):
-            prod_type = "Laptops"
-        elif any(kw in norm_cat for kw in ["phone", "smartphone", "mobile"]):
-            prod_type = "Phones"
-
-    data["Seller authorized"] = "NO"
-    seller_lower = data["Seller Name"].strip().lower()
-    
-    if prod_type and seller_lower and seller_lower != "n/a":
-        auth_list = auth_sellers.get(country_code, {}).get(prod_type, set())
-        if seller_lower in auth_list:
-            data["Seller authorized"] = "YES"
-        else:
-            for auth_s in auth_list:
-                if auth_s and (auth_s in seller_lower or seller_lower in auth_s):
-                    data["Seller authorized"] = "YES"
-                    break
 
     wi = extract_warranty_info(soup, product_name)
     data["Has Warranty"]      = wi["has_warranty"]
@@ -624,12 +481,11 @@ def scrape_item(target: dict, headless: bool = True, timeout: int = 20, country_
     data   = {
         "Input Source": target.get("original_sku", url),
         "Product Name":"N/A","Brand":"N/A","Seller Name":"N/A","Category":"N/A",
-        "SKU":"N/A","Title has Refurbished":"NO","Has refurb tag":"NO",
-        "Official Store":"NO", "Tech week deal":"NO",
-        "Refurbished Indicators":"None","Has Warranty":"NO","Warranty Duration":"N/A",
+        "SKU":"N/A", "Official Store":"NO", "Tech week deal":"NO",
+        "Has Warranty":"NO","Warranty Duration":"N/A",
         "Warranty Source":"None","Warranty Address":"N/A",
         "Price":"N/A","Product Rating":"N/A",
-        "Express":"No", "Seller authorized": "NO",
+        "Express":"No",
         "Primary Image URL": "N/A", "Total Product Images": 0, "Image URLs": []
     }
     driver = None
@@ -790,10 +646,8 @@ if st.button("Start Analysis", type="primary", icon=":material/play_arrow:", key
                     li = br[-1]
                     txt_placeholder.caption(
                         f"**Last Processed:** {li.get('Product Name','N/A')[:70]}  \n"
-                        f"**Refurb:** {li.get('Title has Refurbished','NO')} | "
                         f"**Official Store:** {li.get('Official Store','NO')} | "
-                        f"**Tech week deal:** {li.get('Tech week deal','NO')} | "
-                        f"**Auth Seller:** {li.get('Seller authorized','NO')}"
+                        f"**Tech week deal:** {li.get('Tech week deal','NO')}"
                     )
 
             if all_failed:
@@ -816,36 +670,25 @@ if st.session_state["scraped_results"]:
     
     available_cols = list(df.columns)
     priority_cols = [
-        "SKU", "Product Name", "Brand", "Official Store", "Tech week deal", "Title has Refurbished", "Has refurb tag",
-        "Has Warranty", "Warranty Duration", "Seller Name", "Seller authorized", "Price", 
-        "Product Rating", "Express", "Category", "Refurbished Indicators",
+        "SKU", "Product Name", "Brand", "Official Store", "Tech week deal", 
+        "Has Warranty", "Warranty Duration", "Seller Name", "Price", 
+        "Product Rating", "Express", "Category", 
         "Warranty Source", "Warranty Address", "Primary Image URL", "Total Product Images", "Input Source"
     ]
     df = df[[c for c in priority_cols if c in available_cols]]
 
     st.subheader("Summary")
-    m1, m2, m3 = st.columns(3)
-    
-    m1.metric("Total Analyzed", len(df))
-    refurb_count = int((df["Title has Refurbished"] == "YES").sum()) if "Title has Refurbished" in df.columns else 0
-    m2.metric("Refurbished", refurb_count)
-    auth_count = int((df["Seller authorized"] == "YES").sum()) if "Seller authorized" in df.columns else 0
-    m3.metric("Auth Sellers", auth_count)
+    st.metric("Total Analyzed", len(df))
 
     st.markdown("---")
-    
-    if (df["Title has Refurbished"]=="YES").any():
-        st.subheader("Refurbished Items Detail")
-        st.dataframe(df[df["Title has Refurbished"]=="YES"], use_container_width=True)
-        st.markdown("---")
 
     st.subheader("Full Results")
     st.caption("Use the dropdown to show/hide columns. Select specific rows using the checkboxes on the left to download only those.")
 
     all_cols = list(df.columns)
     default_visible_cols = [
-        "SKU", "Product Name", "Brand", "Official Store", "Tech week deal", "Title has Refurbished", "Has refurb tag",
-        "Has Warranty", "Warranty Duration", "Seller Name", "Seller authorized", "Price"
+        "SKU", "Product Name", "Brand", "Official Store", "Tech week deal", 
+        "Has Warranty", "Warranty Duration", "Seller Name", "Price"
     ]
     default_visible_cols = [c for c in default_visible_cols if c in all_cols]
     
@@ -882,7 +725,7 @@ if st.session_state["scraped_results"]:
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.markdown("""
 <div style="margin-top: 40px; padding: 18px 24px; background: linear-gradient(135deg, #1A1A1A 0%, #2D2D2D 100%); border-radius: 10px; border-top: 3px solid #F68B1E; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
-  <span style="color:#F68B1E; font-weight:800; font-size:0.95rem; font-family:'Nunito',sans-serif;">Refurbished Suite</span>
+  <span style="color:#F68B1E; font-weight:800; font-size:0.95rem; font-family:'Nunito',sans-serif;">Product Analyzer</span>
   <span style="color:#999; font-size:0.78rem; font-family:'Nunito',sans-serif;">High-Speed Listing Analyzer</span>
 </div>
 """, unsafe_allow_html=True)
