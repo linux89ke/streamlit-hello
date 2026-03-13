@@ -3,11 +3,8 @@ Review Moderation Tool
 ======================
 Usage:
   1. pip install streamlit pandas openpyxl
-  2. streamlit run review_moderator.py
-
-Expects:
-  - A CSV of reviews (same format as rating_reviews_*.csv)
-  - Optionally: a plain-text file of vulgar words (one per line), e.g. vulgar_words.txt
+  2. Place vulgar_words_template.txt (or vulgar_words.txt) in the same folder
+  3. streamlit run review_moderator.py
 
 Auto-rejection rules are based on the Ratings & Review Approval Guidelines.
 """
@@ -27,7 +24,7 @@ st.set_page_config(
     page_title="Review Moderator",
     page_icon="🛡️",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # ─────────────────────────────────────────────
@@ -105,12 +102,6 @@ NON_ENGLISH_PATTERNS = re.compile(
 )
 
 
-def load_vulgar_words(filepath: str) -> list[str]:
-    """Load vulgar words from a plain-text file (one word/phrase per line)."""
-    if not filepath or not os.path.exists(filepath):
-        return []
-    with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-        return [line.strip().lower() for line in f if line.strip()]
 
 
 def check_review(row: pd.Series, vulgar_words: list[str]) -> dict:
@@ -217,27 +208,16 @@ def set_decision(rid, decision):
 
 
 # ─────────────────────────────────────────────
-# SIDEBAR — FILE UPLOAD & SETTINGS
+# SETTINGS (no sidebar)
 # ─────────────────────────────────────────────
 
-def sidebar():
-    st.sidebar.image("https://via.placeholder.com/180x40?text=Review+Moderator", use_container_width=True)
-    st.sidebar.markdown("---")
-
-    st.sidebar.header("📂 Load files")
-    csv_file    = st.sidebar.file_uploader("Reviews CSV", type=["csv"])
-    vulgar_file = st.sidebar.file_uploader("Vulgar words list (optional, .txt)", type=["txt"])
-
-    st.sidebar.markdown("---")
-    st.sidebar.header("⚙️ Settings")
-    auto_apply = st.sidebar.toggle("Auto-apply decisions on load", value=True,
-                                   help="Automatically mark auto-detectable reviews as REJECT/DELETE/ESCALATE when you upload")
-    show_approved = st.sidebar.toggle("Show APPROVED in queue", value=False)
-
-    st.sidebar.markdown("---")
-    st.sidebar.caption("Guidelines: Ratings & Review Approval Guidelines v1")
-
-    return csv_file, vulgar_file, auto_apply, show_approved
+def get_settings():
+    """Render settings toggles inline (called from main before the tabs)."""
+    c1, c2, _ = st.columns([2, 2, 5])
+    auto_apply    = c1.toggle("Auto-apply flagged decisions", value=True,
+                              help="Pre-mark REJECT/DELETE/ESCALATE on upload")
+    show_approved = c2.toggle("Show approved in queue", value=False)
+    return auto_apply, show_approved
 
 
 # ─────────────────────────────────────────────
@@ -246,43 +226,47 @@ def sidebar():
 
 def main():
     init_state()
-    csv_file, vulgar_file, auto_apply, show_approved = sidebar()
 
     st.title("🛡️ Review Moderation Tool")
     st.caption("Powered by Jumia Ratings & Review Approval Guidelines")
 
+    # ── CSV uploader — top of page ────────────────────────────────────────
+    csv_file = st.file_uploader(
+        "Upload reviews CSV",
+        type=["csv"],
+        label_visibility="collapsed",
+        help="Same format as the Jumia ratings export",
+    )
+
     if csv_file is None:
-        st.info("👈 Upload a reviews CSV in the sidebar to get started.")
-        st.markdown("""
-        **Expected CSV columns:**
-        `ID, Review Title, Review Detail Text, Customer Nickname, Customer Email, SKU, Seller Name, Status, Created Date, Updated Date, Rating`
-        
-        **Optional:** upload a `vulgar_words.txt` file with one word/phrase per line to auto-flag profanity.
-        """)
+        st.info("⬆️ Upload a reviews CSV above to get started.")
+        st.markdown(
+            "**Expected columns:** `ID, Review Title, Review Detail Text, "
+            "Customer Nickname, Customer Email, SKU, Seller Name, Status, "
+            "Created Date, Updated Date, Rating`"
+        )
         return
+
+    auto_apply, show_approved = get_settings()
+    st.markdown("---")
 
     # ── Load data ─────────────────────────────────────────────────────────
     df = pd.read_csv(csv_file, dtype=str)
     df["Rating"] = pd.to_numeric(df["Rating"], errors="coerce").fillna(3).astype(int)
     df["ID"] = df["ID"].astype(str)
 
-    # Load vulgar words — from uploaded file OR auto-load from app root
+    # ── Auto-load vulgar words from app root (silent — no upload needed) ──
     vulgar_words = []
-    if vulgar_file is not None:
-        content = vulgar_file.read().decode("utf-8", errors="ignore")
-        vulgar_words = [line.strip().lower() for line in content.splitlines()
-                        if line.strip() and not line.strip().startswith("#")]
-    else:
-        # Auto-load from app root directory (same folder as review_moderator.py)
-        app_root = Path(__file__).parent
-        for candidate in ["vulgar_words_template.txt", "vulgar_words.txt"]:
-            auto_path = app_root / candidate
-            if auto_path.exists():
-                with open(auto_path, "r", encoding="utf-8", errors="ignore") as f:
-                    vulgar_words = [line.strip().lower() for line in f
-                                    if line.strip() and not line.strip().startswith("#")]
-                st.sidebar.success(f"✅ Loaded {len(vulgar_words)} vulgar words from `{candidate}`")
-                break
+    app_root = Path(__file__).parent
+    for candidate in ["vulgar_words_template.txt", "vulgar_words.txt"]:
+        auto_path = app_root / candidate
+        if auto_path.exists():
+            with open(auto_path, "r", encoding="utf-8", errors="ignore") as f:
+                vulgar_words = [
+                    line.strip().lower() for line in f
+                    if line.strip() and not line.strip().startswith("#")
+                ]
+            break  # use first file found
 
     # ── Run auto-detection ────────────────────────────────────────────────
     analysis = {}
