@@ -266,11 +266,23 @@ def main():
     df["Rating"] = pd.to_numeric(df["Rating"], errors="coerce").fillna(3).astype(int)
     df["ID"] = df["ID"].astype(str)
 
-    # Load vulgar words
+    # Load vulgar words — from uploaded file OR auto-load from app root
     vulgar_words = []
     if vulgar_file is not None:
         content = vulgar_file.read().decode("utf-8", errors="ignore")
-        vulgar_words = [line.strip().lower() for line in content.splitlines() if line.strip()]
+        vulgar_words = [line.strip().lower() for line in content.splitlines()
+                        if line.strip() and not line.strip().startswith("#")]
+    else:
+        # Auto-load from app root directory (same folder as review_moderator.py)
+        app_root = Path(__file__).parent
+        for candidate in ["vulgar_words_template.txt", "vulgar_words.txt"]:
+            auto_path = app_root / candidate
+            if auto_path.exists():
+                with open(auto_path, "r", encoding="utf-8", errors="ignore") as f:
+                    vulgar_words = [line.strip().lower() for line in f
+                                    if line.strip() and not line.strip().startswith("#")]
+                st.sidebar.success(f"✅ Loaded {len(vulgar_words)} vulgar words from `{candidate}`")
+                break
 
     # ── Run auto-detection ────────────────────────────────────────────────
     analysis = {}
