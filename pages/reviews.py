@@ -339,7 +339,7 @@ def main():
             st.success("🎉 No reviews were auto-flagged — queue is clean!")
         else:
             for _, row in df[df["ID"].isin(flagged_ids)].iterrows():
-                render_review_card(row, analysis[row["ID"]], dup_map)
+                render_review_card(row, analysis[row["ID"]], dup_map, tab_prefix="tab1")
 
     # ── TAB 2: All reviews ──────────────────────────────────────────────────
     with tab2:
@@ -394,7 +394,7 @@ def main():
                 st.rerun()
 
         for _, row in filtered.iterrows():
-            render_review_card(row, analysis[row["ID"]], dup_map)
+            render_review_card(row, analysis[row["ID"]], dup_map, tab_prefix="tab2")
 
     # ── TAB 3: Analytics ────────────────────────────────────────────────────
     with tab3:
@@ -512,7 +512,7 @@ DECISION_EMOJI = {
 }
 
 
-def render_review_card(row, result, dup_map):
+def render_review_card(row, result, dup_map, tab_prefix="t"):
     rid     = str(row["ID"])
     title   = str(row.get("Review Title", "")).strip()
     text    = str(row.get("Review Detail Text", "")).strip()
@@ -559,23 +559,23 @@ def render_review_card(row, result, dup_map):
 
             # Action buttons
             bcol1, bcol2 = st.columns(2)
-            if bcol1.button("✅ Approve", key=f"approve_{rid}"):
+            if bcol1.button("✅ Approve", key=f"{tab_prefix}_approve_{rid}"):
                 set_decision(rid, "APPROVED")
                 st.rerun()
-            if bcol2.button("❌ Reject", key=f"reject_{rid}"):
+            if bcol2.button("❌ Reject", key=f"{tab_prefix}_reject_{rid}"):
                 set_decision(rid, "REJECTED")
                 st.rerun()
 
             bcol3, bcol4 = st.columns(2)
-            if bcol3.button("📤 Escalate", key=f"escalate_{rid}"):
+            if bcol3.button("📤 Escalate", key=f"{tab_prefix}_escalate_{rid}"):
                 set_decision(rid, "ESCALATED")
                 st.rerun()
-            if bcol4.button("🗑️ Delete", key=f"delete_{rid}"):
+            if bcol4.button("🗑️ Delete", key=f"{tab_prefix}_delete_{rid}"):
                 set_decision(rid, "DELETED")
                 st.rerun()
 
             note = st.text_input("Note", value=st.session_state.notes.get(rid, ""),
-                                 key=f"note_{rid}", placeholder="Optional note...")
+                                 key=f"{tab_prefix}_note_{rid}", placeholder="Optional note...")
             if note:
                 st.session_state.notes[rid] = note
 
