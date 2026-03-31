@@ -50,7 +50,6 @@ PRODUCT_MAX_SIZE = (680, 680)
 
 def remove_existing_tag(img):
     """Detects a red 18+ tag in the top right quadrant and whites it out."""
-    # Convert to numpy array for fast pixel scanning
     if img.mode != 'RGB':
         img_rgb = img.convert('RGB')
     else:
@@ -59,35 +58,27 @@ def remove_existing_tag(img):
     data = np.array(img_rgb)
     h, w, _ = data.shape
     
-    # Define the top-right quadrant to search (top 35%, right 35%)
     search_h, search_w = int(h * 0.35), int(w * 0.35)
     top_right = data[0:search_h, w-search_w:w]
     
-    # Create a mask looking for bright red pixels (the circle of the 18+ tag)
-    # R > 150, G < 100, B < 100
     red_mask = (top_right[:, :, 0] > 150) & (top_right[:, :, 1] < 100) & (top_right[:, :, 2] < 100)
     
-    # If we find a cluster of red pixels, obliterate that area with white
     if np.sum(red_mask) > 30:  
         coords = np.argwhere(red_mask)
         y_min, x_min = coords.min(axis=0)
         y_max, x_max = coords.max(axis=0)
         
-        # Add padding to ensure we catch the black text inside and white borders
         pad = 25
         y_min = max(0, y_min - pad)
         x_min = max(0, x_min - pad)
         y_max = min(search_h, y_max + pad)
         x_max = min(search_w, x_max + pad)
         
-        # Calculate real X coordinates on the main image
         real_x_min = (w - search_w) + x_min
         real_x_max = (w - search_w) + x_max
         
-        # White it out
         data[y_min:y_max, real_x_min:real_x_max] = [255, 255, 255]
         
-        # Return image in original mode
         if img.mode == 'RGBA':
             orig_data = np.array(img)
             orig_data[:, :, 0:3] = data
@@ -203,13 +194,23 @@ def scrape_jumia_category(category_url, max_items=20):
     for art in articles:
         if len(results) >= max_items:
             break
+        
+        # Attempt to grab the actual Jumia SKU from data attributes
+        sku = art.get('data-sku')
+        if not sku:
+            core_a = art.find('a', class_='core')
+            if core_a:
+                sku = core_a.get('data-id')
+                
         img_tag = art.find('img', class_='img')
         if img_tag:
-            name = img_tag.get('alt', 'product').strip()
+            name_attr = img_tag.get('alt', 'product').strip()
+            # Prefer the SKU, fallback to sanitized product name
+            base_name = sku if sku else re.sub(r'[^\w\s-]', '', name_attr).strip().replace(' ', '_')
+            
             img_url = img_tag.get('data-src') or img_tag.get('src')
             if img_url and not img_url.endswith('data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'):
-                clean_name = re.sub(r'[^\w\s-]', '', name).strip().replace(' ', '_')
-                results.append((clean_name, img_url))
+                results.append((base_name, img_url))
                 
     return results
 
@@ -271,17 +272,23 @@ if processing_mode == "Single Image":
         st.subheader("Upload Product Image")
         upload_method = st.radio("Choose upload method:", ["Upload from device", "Load from Image URL", "Load from SKU"])
         product_image = None
+        single_output_name = "age_restricted_800x800.jpg" # Default
         
         if upload_method == "Upload from device":
             uploaded_file = st.file_uploader("Choose an image file", type=["png", "jpg", "jpeg", "webp"])
-            if uploaded_file: product_image = Image.open(uploaded_file).convert("RGBA")
+            if uploaded_file: 
+                product_image = Image.open(uploaded_file).convert("RGBA")
+                single_output_name = f"{uploaded_file.name.rsplit('.', 1)[0]}.jpg"
+                
         elif upload_method == "Load from Image URL":
             image_url = st.text_input("Enter image URL:")
             if image_url:
                 try:
                     product_image = Image.open(BytesIO(requests.get(image_url).content)).convert("RGBA")
+                    single_output_name = "image_1.jpg"
                     st.success("Loaded successfully!")
                 except: st.error("Error loading image.")
+                
         else:
             sku_input = st.text_input("Enter Product SKU:")
             jumia_site = st.radio("Select Jumia Site:", ["Jumia Kenya", "Jumia Uganda"], horizontal=True)
@@ -290,8 +297,11 @@ if processing_mode == "Single Image":
                     base_url = "https://www.jumia.co.ke" if jumia_site == "Jumia Kenya" else "https://www.jumia.ug"
                     search_url = f"{base_url}/catalog/?q={sku_input}"
                     product_image = search_jumia_by_sku(sku_input, base_url, search_url)
-                    if product_image: st.success("Found!")
-                    else: st.error("Not found.")
+                    if product_image: 
+                        single_output_name = f"{sku_input.strip()}_1.jpg"
+                        st.success("Found!")
+                    else: 
+                        st.error("Not found.")
 
     with col2:
         st.subheader("Preview (Fixed Composition: 800x800px)")
@@ -307,14 +317,10 @@ if processing_mode == "Single Image":
             
             result_image = Image.new("RGB", TARGET_CANVAS_SIZE, (255, 255, 255))
             
-            # 1. OPTIONAL: Remove existing 18+ tag
             if remove_old_tags:
                 product_image = remove_existing_tag(product_image)
             
-            # 2. Smart crop white space
             product_image = crop_white_space(product_image)
-            
-            # 3. Resize to exact constraint (yielding 60px padding)
             product_image.thumbnail(PRODUCT_MAX_SIZE, Image.Resampling.LANCZOS)
             
             paste_x = (TARGET_CANVAS_SIZE[0] - product_image.width) // 2
@@ -328,7 +334,7 @@ if processing_mode == "Single Image":
             
             buf = BytesIO()
             result_image.save(buf, format="JPEG", quality=95)
-            st.download_button("Download Image", buf.getvalue(), "age_restricted_800x800.jpg", "image/jpeg", use_container_width=True)
+            st.download_button("Download Image", buf.getvalue(), single_output_name, "image/jpeg", use_container_width=True)
 
 # ----------------- BULK PROCESSING MODE -----------------
 else:
@@ -338,13 +344,14 @@ else:
         ["Upload multiple images", "Enter URLs manually", "Upload Smart Excel", "Enter SKUs", "Jumia Category URL (Auto-Scrape)"]
     )
     
+    # Store tuples as: (Image_Object, Base_Filename, Is_Device_Upload)
     products_to_process = []
     
     if bulk_method == "Upload multiple images":
         uploaded_files = st.file_uploader("Choose multiple files", type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True)
         if uploaded_files:
             for f in uploaded_files:
-                products_to_process.append((Image.open(f).convert("RGBA"), f.name.rsplit('.', 1)[0]))
+                products_to_process.append((Image.open(f).convert("RGBA"), f.name.rsplit('.', 1)[0], True))
                 
     elif bulk_method == "Enter URLs manually":
         urls_input = st.text_area("Enter image URLs (one per line):")
@@ -353,7 +360,7 @@ else:
             for idx, url in enumerate(urls):
                 try:
                     img = Image.open(BytesIO(requests.get(url, timeout=10).content)).convert("RGBA")
-                    products_to_process.append((img, f"image_{idx+1}"))
+                    products_to_process.append((img, f"image_{idx+1}", False))
                 except: pass
 
     elif bulk_method == "Upload Smart Excel":
@@ -376,18 +383,24 @@ else:
             status = st.empty()
             
             for idx, row in df.iterrows():
-                name = str(row[name_col]) if name_col else f"product_{idx+1}"
-                clean_name = re.sub(r'[^\w\s-]', '', name).strip().replace(' ', '_')
+                # Prefer SKU for naming if it exists in the row
+                if sku_col and pd.notna(row[sku_col]):
+                    base_name = str(row[sku_col]).strip()
+                elif name_col and pd.notna(row[name_col]):
+                    name = str(row[name_col])
+                    base_name = re.sub(r'[^\w\s-]', '', name).strip().replace(' ', '_')
+                else:
+                    base_name = f"product_{idx+1}"
                 
                 img = None
                 if url_col and pd.notna(row[url_col]):
                     try: img = Image.open(BytesIO(requests.get(str(row[url_col]), timeout=10).content)).convert("RGBA")
                     except: pass
                 elif sku_col and pd.notna(row[sku_col]):
-                    sku = str(row[sku_col])
+                    sku = str(row[sku_col]).strip()
                     img = search_jumia_by_sku(sku, "https://www.jumia.co.ke", f"https://www.jumia.co.ke/catalog/?q={sku}")
                 
-                if img: products_to_process.append((img, clean_name))
+                if img: products_to_process.append((img, base_name, False))
                 progress.progress((idx + 1) / len(df))
                 status.text(f"Processed row {idx+1}/{len(df)}")
                 
@@ -408,7 +421,7 @@ else:
                 futs = {x.submit(fetch, s): s for s in skus}
                 for i, f in enumerate(concurrent.futures.as_completed(futs)):
                     sku, img = f.result()
-                    if img: products_to_process.append((img, sku))
+                    if img: products_to_process.append((img, sku, False))
                     prog.progress((i+1)/len(skus))
                     stat.text(f"Scraped {i+1}/{len(skus)} SKUs")
 
@@ -433,7 +446,7 @@ else:
                     futs = [x.submit(fetch_img, n, u) for n, u in scraped_data]
                     for i, f in enumerate(concurrent.futures.as_completed(futs)):
                         n, img = f.result()
-                        if img: products_to_process.append((img, n))
+                        if img: products_to_process.append((img, n, False))
                         prog.progress((i+1)/len(scraped_data))
                         stat.text(f"Downloaded {i+1}/{len(scraped_data)} category images")
 
@@ -441,8 +454,6 @@ else:
     if products_to_process:
         st.markdown("---")
         st.subheader("Process & Preview")
-        
-        rename_pattern = st.text_input("Renaming Pattern (Use {original} for original name/SKU):", value="{original}_18plus")
         
         if st.button("Generate Composites", type="primary", use_container_width=True):
             tag_path = TAG_FILE if os.path.exists(TAG_FILE) else os.path.join(os.path.dirname(__file__), TAG_FILE)
@@ -461,17 +472,13 @@ else:
             cols_per_row = 4
             prog = st.progress(0)
             
-            for idx, (img, fname) in enumerate(products_to_process):
+            for idx, (img, fname, is_device) in enumerate(products_to_process):
                 res = Image.new("RGB", TARGET_CANVAS_SIZE, (255, 255, 255))
                 
-                # 1. Remove old tags if requested
                 if remove_old_tags:
                     img = remove_existing_tag(img)
                 
-                # 2. Smart Trim
                 img = crop_white_space(img)
-                
-                # 3. Resize to constraint
                 img.thumbnail(PRODUCT_MAX_SIZE, Image.Resampling.LANCZOS)
                 
                 px = (TARGET_CANVAS_SIZE[0] - img.width) // 2
@@ -482,7 +489,12 @@ else:
                 
                 res.paste(tag_image, (0, 0), tag_image)
                 
-                final_name = rename_pattern.replace("{original}", fname)
+                # Naming Logic Rules:
+                if is_device:
+                    final_name = fname # Keep original filename
+                else:
+                    final_name = f"{fname}_1" # Append _1 to SKU/Name
+                    
                 processed_images.append((res, final_name))
                 
                 if idx % cols_per_row == 0:
