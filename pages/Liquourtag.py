@@ -2,7 +2,6 @@ import streamlit as st
 from PIL import Image
 import requests
 from io import BytesIO
-import numpy as np
 import os
 import re
 from bs4 import BeautifulSoup
@@ -16,7 +15,7 @@ st.set_page_config(
 
 # Title and description
 st.title("Age Restriction Tag Generator")
-st.markdown("Upload a product image and add a fixed 18+ tag with exact margins!")
+st.markdown("Upload a product image and add a fixed 18+ overlay!")
 
 # Sidebar for information
 st.sidebar.header("Processing Mode")
@@ -27,33 +26,15 @@ processing_mode = st.sidebar.radio(
 
 st.sidebar.markdown("---")
 st.sidebar.header("Image Settings")
-st.sidebar.caption("Composition is fixed to your exact specifications:")
+st.sidebar.caption("Composition uses a fixed 800x800px transparent overlay.")
 st.sidebar.markdown("- **Final Canvas**: 800x800px")
-st.sidebar.markdown("- **18+ Tag Size**: 212x212px")
-st.sidebar.markdown("- **18+ Tag Margins**: 16px right, 40px top")
-st.sidebar.markdown("- **18+ Tag Coordinates**: X=572, Y=40")
-st.sidebar.caption("Product images are centered and scaled to fit the canvas.")
+st.sidebar.caption("Product images are centered and scaled to fit the canvas beneath your custom overlay.")
 
 # Tag file definition
 TAG_FILE = "NSFW-18++-Tag.png"
 
-# Fixed composition values based on user specifications
-# X = 800 (canvas width) - 212 (tag width) - 16 (right margin) = 572
-# Y = 40 (top margin)
+# Fixed final canvas size
 TARGET_CANVAS_SIZE = (800, 800)
-TAG_POS = (572, 40)
-TAG_SIZE = (212, 212)
-
-def crop_transparent(img):
-    """Automatically crops out invisible transparent padding around an image."""
-    if img.mode != 'RGBA':
-        img = img.convert('RGBA')
-    # Use the alpha channel to find the bounding box of non-transparent pixels
-    alpha = img.split()[-1]
-    bbox = alpha.getbbox()
-    if bbox:
-        return img.crop(bbox)
-    return img
 
 @st.cache_resource
 def get_driver_path():
@@ -302,18 +283,20 @@ if processing_mode == "Single Image":
         if product_image is not None:
             try:
                 tag_path = TAG_FILE
-                
                 if not os.path.exists(tag_path):
                     tag_path = os.path.join(os.path.dirname(__file__), TAG_FILE)
                 
                 if not os.path.exists(tag_path):
-                    st.error(f"Tag file not found: {TAG_FILE}")
-                    st.info(f"Please make sure the {TAG_FILE} file is in the same directory as this script.")
+                    st.error(f"Overlay file not found: {TAG_FILE}")
+                    st.info(f"Please make sure your 800x800 {TAG_FILE} file is in the same directory as this script.")
                     st.stop()
                 
-                # Load and automatically CROP the transparent padding around the tag!
+                # Load the 800x800 transparent overlay
                 tag_image = Image.open(tag_path).convert("RGBA")
-                tag_image = crop_transparent(tag_image)
+                
+                # Force the overlay to exactly 800x800 just in case
+                if tag_image.size != TARGET_CANVAS_SIZE:
+                    tag_image = tag_image.resize(TARGET_CANVAS_SIZE, Image.Resampling.LANCZOS)
                 
                 # 1. Start with a clean fixed 800x800 canvas
                 result_image = Image.new("RGB", TARGET_CANVAS_SIZE, (255, 255, 255))
@@ -330,14 +313,8 @@ if processing_mode == "Single Image":
                 else:
                     result_image.paste(product_image, (paste_x, paste_y))
                 
-                # 3. Scale and place the tag image
-                tag_resized = tag_image.resize(TAG_SIZE, Image.Resampling.LANCZOS)
-                
-                # Overlay tag onto the exact calculated coordinates (X=572, Y=40)
-                if tag_resized.mode == 'RGBA':
-                    result_image.paste(tag_resized, TAG_POS, tag_resized)
-                else:
-                    result_image.paste(tag_resized, TAG_POS)
+                # 3. Slap the 800x800 transparent overlay perfectly on top
+                result_image.paste(tag_image, (0, 0), tag_image)
                 
                 # Display the result
                 st.image(result_image, use_container_width=True)
@@ -498,13 +475,13 @@ else:  # Bulk Processing Mode
                 if not os.path.exists(tag_path):
                     tag_path = os.path.join(os.path.dirname(__file__), TAG_FILE)
                 if not os.path.exists(tag_path):
-                    st.error(f"Tag file not found: {TAG_FILE}")
+                    st.error(f"Overlay file not found: {TAG_FILE}")
                     st.stop()
                 
-                # Load and automatically CROP the transparent padding around the tag!
+                # Load the transparent overlay
                 tag_image = Image.open(tag_path).convert("RGBA")
-                tag_image = crop_transparent(tag_image)
-                tag_resized = tag_image.resize(TAG_SIZE, Image.Resampling.LANCZOS)
+                if tag_image.size != TARGET_CANVAS_SIZE:
+                    tag_image = tag_image.resize(TARGET_CANVAS_SIZE, Image.Resampling.LANCZOS)
 
                 for idx, (product_image, filename) in enumerate(products_to_process):
                     try:
@@ -521,11 +498,8 @@ else:  # Bulk Processing Mode
                         else:
                             result_image.paste(product_image, (paste_x, paste_y))
                         
-                        # 3. Place pre-scaled tag at exactly X=572, Y=40
-                        if tag_resized.mode == 'RGBA':
-                            result_image.paste(tag_resized, TAG_POS, tag_resized)
-                        else:
-                            result_image.paste(tag_resized, TAG_POS)
+                        # 3. Slap the overlay right on top
+                        result_image.paste(tag_image, (0, 0), tag_image)
                         
                         processed_images.append((result_image, filename))
                         
@@ -571,7 +545,7 @@ st.markdown("---")
 st.markdown(
     f"""
     <div style='text-align: center; color: #666;'>
-    <p>Ensure the {TAG_FILE} file is in the script folder. Product images are centered on a fixed 800x800 canvas.</p>
+    <p>Ensure your 800x800px transparent {TAG_FILE} file is in the script folder.</p>
     </div>
     """,
     unsafe_allow_html=True
