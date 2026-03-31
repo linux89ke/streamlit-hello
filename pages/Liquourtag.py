@@ -19,7 +19,7 @@ st.set_page_config(
 
 # Title and description
 st.title("Age Restriction Tag Generator")
-
+st.markdown("Upload a product image and add a fixed 18+ overlay!")
 
 # Sidebar for information
 st.sidebar.header("Processing Mode")
@@ -28,6 +28,12 @@ processing_mode = st.sidebar.radio(
     ["Single Image", "Bulk Processing"]
 )
 
+st.sidebar.markdown("---")
+st.sidebar.header("Image Settings")
+st.sidebar.caption("Composition uses a fixed 800x800px transparent overlay.")
+st.sidebar.markdown("- **Final Canvas**: 800x800px")
+st.sidebar.markdown("- **Smart Trim**: Active (Auto-crops white space)")
+st.sidebar.markdown("- **Product Margins**: 60px top & bottom (680px constraint)")
 
 st.sidebar.markdown("---")
 st.sidebar.header("Advanced Clean-up")
@@ -298,7 +304,7 @@ if processing_mode == "Single Image":
                         st.error("Not found.")
 
     with col2:
-        st.subheader("Preview")
+        st.subheader("Preview (Fixed Composition: 800x800px)")
         if product_image is not None:
             tag_path = TAG_FILE if os.path.exists(TAG_FILE) else os.path.join(os.path.dirname(__file__), TAG_FILE)
             if not os.path.exists(tag_path):
