@@ -33,10 +33,12 @@ st.sidebar.header("Image Settings")
 st.sidebar.caption("Composition uses a fixed 800x800px transparent overlay.")
 st.sidebar.markdown("- **Final Canvas**: 800x800px")
 st.sidebar.markdown("- **Smart Trim**: Active (Auto-crops white space)")
+st.sidebar.markdown("- **Product Margins**: 60px top & bottom (680px height constraint)")
 
 # Tag file definition
 TAG_FILE = "NSFW-18++-Tag.png"
 TARGET_CANVAS_SIZE = (800, 800)
+PRODUCT_MAX_SIZE = (680, 680)  # 800 - 60(top) - 60(bottom) = 680
 
 def crop_white_space(img):
     """Smart Trim: Removes massive white borders from product images."""
@@ -83,7 +85,6 @@ def get_chrome_options(headless=True):
     chrome_options.add_argument("--disable-notifications")
     chrome_options.add_argument("--disable-logging")
     chrome_options.add_argument("--log-level=3")
-    chrome_options.add_argument("--silent")
     chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
     possible_paths = ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome-stable", "/usr/bin/google-chrome"]
@@ -251,8 +252,10 @@ if processing_mode == "Single Image":
                 tag_image = tag_image.resize(TARGET_CANVAS_SIZE, Image.Resampling.LANCZOS)
             
             result_image = Image.new("RGB", TARGET_CANVAS_SIZE, (255, 255, 255))
+            
+            # Smart crop then resize to 680x680 (yielding exactly 60px padding for tall items)
             product_image = crop_white_space(product_image)
-            product_image.thumbnail((750, 750), Image.Resampling.LANCZOS)
+            product_image.thumbnail(PRODUCT_MAX_SIZE, Image.Resampling.LANCZOS)
             
             paste_x = (TARGET_CANVAS_SIZE[0] - product_image.width) // 2
             paste_y = (TARGET_CANVAS_SIZE[1] - product_image.height) // 2
@@ -405,8 +408,10 @@ else:
             for idx, (img, fname) in enumerate(products_to_process):
                 # Process
                 res = Image.new("RGB", TARGET_CANVAS_SIZE, (255, 255, 255))
+                
+                # Smart crop then resize to exactly 680x680 constraints
                 img = crop_white_space(img)
-                img.thumbnail((750, 750), Image.Resampling.LANCZOS)
+                img.thumbnail(PRODUCT_MAX_SIZE, Image.Resampling.LANCZOS)
                 
                 px = (TARGET_CANVAS_SIZE[0] - img.width) // 2
                 py = (TARGET_CANVAS_SIZE[1] - img.height) // 2
