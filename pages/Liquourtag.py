@@ -44,6 +44,17 @@ TARGET_CANVAS_SIZE = (800, 800)
 TAG_POS = (572, 40)
 TAG_SIZE = (212, 212)
 
+def crop_transparent(img):
+    """Automatically crops out invisible transparent padding around an image."""
+    if img.mode != 'RGBA':
+        img = img.convert('RGBA')
+    # Use the alpha channel to find the bounding box of non-transparent pixels
+    alpha = img.split()[-1]
+    bbox = alpha.getbbox()
+    if bbox:
+        return img.crop(bbox)
+    return img
+
 @st.cache_resource
 def get_driver_path():
     """Cache driver installation."""
@@ -300,7 +311,9 @@ if processing_mode == "Single Image":
                     st.info(f"Please make sure the {TAG_FILE} file is in the same directory as this script.")
                     st.stop()
                 
+                # Load and automatically CROP the transparent padding around the tag!
                 tag_image = Image.open(tag_path).convert("RGBA")
+                tag_image = crop_transparent(tag_image)
                 
                 # 1. Start with a clean fixed 800x800 canvas
                 result_image = Image.new("RGB", TARGET_CANVAS_SIZE, (255, 255, 255))
@@ -462,6 +475,20 @@ else:  # Bulk Processing Mode
         st.markdown("---")
         st.subheader("Process to Fixed Composition")
         st.info(f"Loaded {len(products_to_process)} product images. Click to composite.")
+        
+        # Display clean preview grid
+        cols_per_row = 3
+        rows = (len(products_to_process) + cols_per_row - 1) // cols_per_row
+        for row in range(rows):
+            cols = st.columns(cols_per_row)
+            for col_idx in range(cols_per_row):
+                idx = row * cols_per_row + col_idx
+                if idx < len(products_to_process):
+                    img, filename = products_to_process[idx]
+                    with cols[col_idx]:
+                        st.image(img, caption=filename, use_container_width=True)
+        
+        st.markdown("---")
         if st.button("Process All to 800x800", use_container_width=True):
             st.info(f"Processing {len(products_to_process)} images...")
             progress_bar = st.progress(0)
@@ -474,7 +501,9 @@ else:  # Bulk Processing Mode
                     st.error(f"Tag file not found: {TAG_FILE}")
                     st.stop()
                 
+                # Load and automatically CROP the transparent padding around the tag!
                 tag_image = Image.open(tag_path).convert("RGBA")
+                tag_image = crop_transparent(tag_image)
                 tag_resized = tag_image.resize(TAG_SIZE, Image.Resampling.LANCZOS)
 
                 for idx, (product_image, filename) in enumerate(products_to_process):
