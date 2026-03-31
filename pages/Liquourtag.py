@@ -33,12 +33,69 @@ st.sidebar.header("Image Settings")
 st.sidebar.caption("Composition uses a fixed 800x800px transparent overlay.")
 st.sidebar.markdown("- **Final Canvas**: 800x800px")
 st.sidebar.markdown("- **Smart Trim**: Active (Auto-crops white space)")
-st.sidebar.markdown("- **Product Margins**: 60px top & bottom (680px height constraint)")
+st.sidebar.markdown("- **Product Margins**: 60px top & bottom (680px constraint)")
+
+st.sidebar.markdown("---")
+st.sidebar.header("Advanced Clean-up")
+remove_old_tags = st.sidebar.checkbox(
+    "Auto-Remove Existing 18+ Tags", 
+    value=True, 
+    help="Scans the top-right corner for old/small red 18+ tags and whites them out before applying the new one."
+)
 
 # Tag file definition
 TAG_FILE = "NSFW-18++-Tag.png"
 TARGET_CANVAS_SIZE = (800, 800)
-PRODUCT_MAX_SIZE = (680, 680)  # 800 - 60(top) - 60(bottom) = 680
+PRODUCT_MAX_SIZE = (680, 680)
+
+def remove_existing_tag(img):
+    """Detects a red 18+ tag in the top right quadrant and whites it out."""
+    # Convert to numpy array for fast pixel scanning
+    if img.mode != 'RGB':
+        img_rgb = img.convert('RGB')
+    else:
+        img_rgb = img.copy()
+        
+    data = np.array(img_rgb)
+    h, w, _ = data.shape
+    
+    # Define the top-right quadrant to search (top 35%, right 35%)
+    search_h, search_w = int(h * 0.35), int(w * 0.35)
+    top_right = data[0:search_h, w-search_w:w]
+    
+    # Create a mask looking for bright red pixels (the circle of the 18+ tag)
+    # R > 150, G < 100, B < 100
+    red_mask = (top_right[:, :, 0] > 150) & (top_right[:, :, 1] < 100) & (top_right[:, :, 2] < 100)
+    
+    # If we find a cluster of red pixels, obliterate that area with white
+    if np.sum(red_mask) > 30:  
+        coords = np.argwhere(red_mask)
+        y_min, x_min = coords.min(axis=0)
+        y_max, x_max = coords.max(axis=0)
+        
+        # Add padding to ensure we catch the black text inside and white borders
+        pad = 25
+        y_min = max(0, y_min - pad)
+        x_min = max(0, x_min - pad)
+        y_max = min(search_h, y_max + pad)
+        x_max = min(search_w, x_max + pad)
+        
+        # Calculate real X coordinates on the main image
+        real_x_min = (w - search_w) + x_min
+        real_x_max = (w - search_w) + x_max
+        
+        # White it out
+        data[y_min:y_max, real_x_min:real_x_max] = [255, 255, 255]
+        
+        # Return image in original mode
+        if img.mode == 'RGBA':
+            orig_data = np.array(img)
+            orig_data[:, :, 0:3] = data
+            return Image.fromarray(orig_data, 'RGBA')
+        else:
+            return Image.fromarray(data, 'RGB')
+            
+    return img
 
 def crop_white_space(img):
     """Smart Trim: Removes massive white borders from product images."""
@@ -126,15 +183,13 @@ def get_driver(headless=True):
     return driver
 
 def scrape_jumia_category(category_url, max_items=20):
-    """Scrapes images directly from a Jumia category grid."""
     driver = get_driver(headless=True)
     if not driver:
         return []
     
     driver.get(category_url)
-    time.sleep(2)  # Allow initial load
+    time.sleep(2) 
     
-    # Scroll multiple times to trigger lazy loading for up to max_items
     for _ in range(3):
         driver.execute_script("window.scrollBy(0, 1500);")
         time.sleep(1)
@@ -151,7 +206,6 @@ def scrape_jumia_category(category_url, max_items=20):
         img_tag = art.find('img', class_='img')
         if img_tag:
             name = img_tag.get('alt', 'product').strip()
-            # Jumia uses data-src for lazy loaded images
             img_url = img_tag.get('data-src') or img_tag.get('src')
             if img_url and not img_url.endswith('data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'):
                 clean_name = re.sub(r'[^\w\s-]', '', name).strip().replace(' ', '_')
@@ -253,8 +307,14 @@ if processing_mode == "Single Image":
             
             result_image = Image.new("RGB", TARGET_CANVAS_SIZE, (255, 255, 255))
             
-            # Smart crop then resize to 680x680 (yielding exactly 60px padding for tall items)
+            # 1. OPTIONAL: Remove existing 18+ tag
+            if remove_old_tags:
+                product_image = remove_existing_tag(product_image)
+            
+            # 2. Smart crop white space
             product_image = crop_white_space(product_image)
+            
+            # 3. Resize to exact constraint (yielding 60px padding)
             product_image.thumbnail(PRODUCT_MAX_SIZE, Image.Resampling.LANCZOS)
             
             paste_x = (TARGET_CANVAS_SIZE[0] - product_image.width) // 2
@@ -309,7 +369,6 @@ else:
                 elif 'sku' in c_low: sku_col = col
                 elif 'name' in c_low or 'title' in c_low: name_col = col
             
-            # Fallbacks
             if not url_col and not sku_col and len(df.columns) > 0: url_col = df.columns[0]
             if not name_col and len(df.columns) > 1: name_col = df.columns[1]
             
@@ -383,7 +442,6 @@ else:
         st.markdown("---")
         st.subheader("Process & Preview")
         
-        # Batch Rename Pattern
         rename_pattern = st.text_input("Renaming Pattern (Use {original} for original name/SKU):", value="{original}_18plus")
         
         if st.button("Generate Composites", type="primary", use_container_width=True):
@@ -398,19 +456,22 @@ else:
 
             processed_images = []
             
-            # Setup Live Preview Grid
             st.markdown("### Live Preview")
             preview_container = st.container()
             cols_per_row = 4
-            
             prog = st.progress(0)
             
             for idx, (img, fname) in enumerate(products_to_process):
-                # Process
                 res = Image.new("RGB", TARGET_CANVAS_SIZE, (255, 255, 255))
                 
-                # Smart crop then resize to exactly 680x680 constraints
+                # 1. Remove old tags if requested
+                if remove_old_tags:
+                    img = remove_existing_tag(img)
+                
+                # 2. Smart Trim
                 img = crop_white_space(img)
+                
+                # 3. Resize to constraint
                 img.thumbnail(PRODUCT_MAX_SIZE, Image.Resampling.LANCZOS)
                 
                 px = (TARGET_CANVAS_SIZE[0] - img.width) // 2
@@ -424,14 +485,12 @@ else:
                 final_name = rename_pattern.replace("{original}", fname)
                 processed_images.append((res, final_name))
                 
-                # Live Preview
                 if idx % cols_per_row == 0:
                     current_cols = preview_container.columns(cols_per_row)
                 current_cols[idx % cols_per_row].image(res, caption=final_name, use_container_width=True)
                 
                 prog.progress((idx + 1) / len(products_to_process))
                 
-            # Zip and Download
             import zipfile
             zip_buffer = BytesIO()
             with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
