@@ -39,16 +39,16 @@ st.sidebar.header("Image Settings")
 if 'last_image_hash' not in st.session_state:
     st.session_state.last_image_hash = None
 if 'tag_scale_value' not in st.session_state:
-    st.session_state.tag_scale_value = 25  # Default to 25% of image width
+    st.session_state.tag_scale_value = 40  # Increased default to 40%
 
 tag_scale = st.sidebar.slider(
     "18+ Tag Size (% of image width):",
     min_value=10,
-    max_value=60,
+    max_value=100,  # Increased max limit to 100%
     value=st.session_state.tag_scale_value,
     step=5,
     key="tag_scale_slider",
-    help="Adjust how large the 18+ tag appears on the product. Default is 25%"
+    help="Adjust how large the 18+ tag appears on the product. Default is 40%"
 )
 st.session_state.tag_scale_value = tag_scale
 st.sidebar.caption(f"Current tag size: {tag_scale}%")
@@ -297,7 +297,7 @@ if processing_mode == "Single Image":
                 # Reset slider if this is a new image
                 if st.session_state.last_image_hash != file_hash:
                     st.session_state.last_image_hash = file_hash
-                    st.session_state.tag_scale_value = 25
+                    st.session_state.tag_scale_value = 40
                 
                 product_image = Image.open(uploaded_file).convert("RGBA")
         
@@ -308,7 +308,7 @@ if processing_mode == "Single Image":
                     # Reset slider if this is a new URL
                     if st.session_state.last_image_hash != image_url:
                         st.session_state.last_image_hash = image_url
-                        st.session_state.tag_scale_value = 25
+                        st.session_state.tag_scale_value = 40
                     
                     response = requests.get(image_url)
                     product_image = Image.open(BytesIO(response.content)).convert("RGBA")
@@ -343,7 +343,7 @@ if processing_mode == "Single Image":
                         sku_hash = f"{sku_input}_{jumia_site}"
                         if st.session_state.last_image_hash != sku_hash:
                             st.session_state.last_image_hash = sku_hash
-                            st.session_state.tag_scale_value = 25
+                            st.session_state.tag_scale_value = 40
                         
                         product_image = search_jumia_by_sku(sku_input, base_url, search_url)
                         if product_image:
@@ -599,12 +599,12 @@ else:  # Bulk Processing Mode
                         # Individual size slider for this image
                         key = f"scale_{idx}_{filename}"
                         if key not in st.session_state.individual_scales:
-                            st.session_state.individual_scales[key] = 25
+                            st.session_state.individual_scales[key] = 40
                         
                         scale = st.slider(
                             "Tag Size %",
                             min_value=10,
-                            max_value=60,
+                            max_value=100,
                             value=st.session_state.individual_scales[key],
                             step=5,
                             key=f"slider_{key}",
@@ -637,7 +637,7 @@ else:  # Bulk Processing Mode
                     try:
                         # Get individual scale for this image
                         key = f"scale_{idx}_{filename}"
-                        individual_scale = st.session_state.individual_scales.get(key, 25)
+                        individual_scale = st.session_state.individual_scales.get(key, 40)
                         
                         prod_width, prod_height = product_image.size
                         result_image = Image.new("RGB", (prod_width, prod_height), (255, 255, 255))
