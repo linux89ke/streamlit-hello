@@ -16,7 +16,7 @@ st.set_page_config(
 
 # Title and description
 st.title("Age Restriction Tag Generator")
-st.markdown("Upload a product image and add a fixed 18+ tag with professional composition!")
+st.markdown("Upload a product image and add a fixed 18+ tag with exact margins!")
 
 # Sidebar for information
 st.sidebar.header("Processing Mode")
@@ -27,18 +27,21 @@ processing_mode = st.sidebar.radio(
 
 st.sidebar.markdown("---")
 st.sidebar.header("Image Settings")
-st.sidebar.caption("Composition is now fixed based on user demo:")
-st.sidebar.markdown("- **Final Canvas**: 1200x800px (Horizontal)")
-st.sidebar.markdown("- **18+ Tag Position**: X=512, Y=37")
+st.sidebar.caption("Composition is fixed to your exact specifications:")
+st.sidebar.markdown("- **Final Canvas**: 800x800px")
 st.sidebar.markdown("- **18+ Tag Size**: 212x212px")
-st.sidebar.caption("Product images are centered and scaled to fit the scene.")
+st.sidebar.markdown("- **18+ Tag Margins**: 16px right, 40px top")
+st.sidebar.markdown("- **18+ Tag Coordinates**: X=572, Y=40")
+st.sidebar.caption("Product images are centered and scaled to fit the canvas.")
 
-# Tag file definition (hardcoded, singular)
+# Tag file definition
 TAG_FILE = "NSFW-18++-Tag.png"
 
-# Fixed composition values
-NEW_TARGET_CANVAS_SIZE = (1200, 800)
-TAG_POS = (512, 37)
+# Fixed composition values based on user specifications
+# X = 800 (canvas width) - 212 (tag width) - 16 (right margin) = 572
+# Y = 40 (top margin)
+TARGET_CANVAS_SIZE = (800, 800)
+TAG_POS = (572, 40)
 TAG_SIZE = (212, 212)
 
 @st.cache_resource
@@ -283,16 +286,13 @@ if processing_mode == "Single Image":
                             st.error("Could not find product with this SKU")
 
     with col2:
-        st.subheader("Preview (Fixed Composition: 1200x800px)")
+        st.subheader("Preview (Fixed Composition: 800x800px)")
         
         if product_image is not None:
             try:
-                # Load the single hardcoded 18+ tag
                 tag_path = TAG_FILE
                 
-                # Check for the file - assume it's in the same directory for Streamlit
                 if not os.path.exists(tag_path):
-                    # For local testing, Streamlit can look in the script folder
                     tag_path = os.path.join(os.path.dirname(__file__), TAG_FILE)
                 
                 if not os.path.exists(tag_path):
@@ -302,29 +302,25 @@ if processing_mode == "Single Image":
                 
                 tag_image = Image.open(tag_path).convert("RGBA")
                 
-                # 1. Start with a clean fixed canvas
-                result_image = Image.new("RGB", NEW_TARGET_CANVAS_SIZE, (255, 255, 255))
+                # 1. Start with a clean fixed 800x800 canvas
+                result_image = Image.new("RGB", TARGET_CANVAS_SIZE, (255, 255, 255))
                 
                 # 2. Scale and place the product image
-                # Resizing bottle to fit scene vertically, leaving good padding
-                # thumbnail scales *in place*, fitting *within* the box
-                product_image.thumbnail((900, 650), Image.Resampling.LANCZOS)
+                product_image.thumbnail((750, 750), Image.Resampling.LANCZOS)
                 
                 # Center the product image horizontally and vertically
-                paste_x = (NEW_TARGET_CANVAS_SIZE[0] - product_image.width) // 2
-                paste_y = (NEW_TARGET_CANVAS_SIZE[1] - product_image.height) // 2
+                paste_x = (TARGET_CANVAS_SIZE[0] - product_image.width) // 2
+                paste_y = (TARGET_CANVAS_SIZE[1] - product_image.height) // 2
                 
-                # Paste product image onto background, preserving optional alpha
                 if product_image.mode == 'RGBA':
                     result_image.paste(product_image, (paste_x, paste_y), product_image)
                 else:
                     result_image.paste(product_image, (paste_x, paste_y))
                 
                 # 3. Scale and place the tag image
-                # Resize the tag to the exact fixed dimensions
                 tag_resized = tag_image.resize(TAG_SIZE, Image.Resampling.LANCZOS)
                 
-                # Overlay tag onto the top right corner at the exact hardcoded coordinates
+                # Overlay tag onto the exact calculated coordinates (X=572, Y=40)
                 if tag_resized.mode == 'RGBA':
                     result_image.paste(tag_resized, TAG_POS, tag_resized)
                 else:
@@ -341,7 +337,7 @@ if processing_mode == "Single Image":
                 st.download_button(
                     label="Download Composite Image (JPEG)",
                     data=buf,
-                    file_name="age_restricted_product_image.jpg",
+                    file_name="age_restricted_product_800x800.jpg",
                     mime="image/jpeg",
                     use_container_width=True
                 )
@@ -352,7 +348,7 @@ if processing_mode == "Single Image":
             st.info("Upload or provide a URL for a product image to get started!")
 
 else:  # Bulk Processing Mode
-    st.subheader("Bulk Processing (to Fixed 1200x800px Composition)")
+    st.subheader("Bulk Processing (to Fixed 800x800px Composition)")
     st.markdown("Process multiple product images at once into a uniform composite.")
     
     bulk_method = st.radio(
@@ -360,7 +356,7 @@ else:  # Bulk Processing Mode
         ["Upload multiple images", "Enter URLs manually", "Upload Excel file with URLs", "Enter SKUs"]
     )
     
-    products_to_process = []  # List of (image, filename) tuples
+    products_to_process = []
     
     if bulk_method == "Upload multiple images":
         uploaded_files = st.file_uploader(
@@ -466,38 +462,37 @@ else:  # Bulk Processing Mode
         st.markdown("---")
         st.subheader("Process to Fixed Composition")
         st.info(f"Loaded {len(products_to_process)} product images. Click to composite.")
-        if st.button("Process All to 1200x800", use_container_width=True):
+        if st.button("Process All to 800x800", use_container_width=True):
             st.info(f"Processing {len(products_to_process)} images...")
             progress_bar = st.progress(0)
             processed_images = []
             try:
-                # Load single hardcoded tag
                 tag_path = TAG_FILE
                 if not os.path.exists(tag_path):
                     tag_path = os.path.join(os.path.dirname(__file__), TAG_FILE)
                 if not os.path.exists(tag_path):
                     st.error(f"Tag file not found: {TAG_FILE}")
                     st.stop()
+                
                 tag_image = Image.open(tag_path).convert("RGBA")
-                # Pre-scale tag to exact dimensions for efficiency
                 tag_resized = tag_image.resize(TAG_SIZE, Image.Resampling.LANCZOS)
 
                 for idx, (product_image, filename) in enumerate(products_to_process):
                     try:
-                        # 1. Create fixed clean canvas
-                        result_image = Image.new("RGB", NEW_TARGET_CANVAS_SIZE, (255, 255, 255))
+                        # 1. Create 800x800 canvas
+                        result_image = Image.new("RGB", TARGET_CANVAS_SIZE, (255, 255, 255))
                         
-                        # 2. Scale and place product image centrally
-                        product_image.thumbnail((900, 650), Image.Resampling.LANCZOS)
-                        paste_x = (NEW_TARGET_CANVAS_SIZE[0] - product_image.width) // 2
-                        paste_y = (NEW_TARGET_CANVAS_SIZE[1] - product_image.height) // 2
+                        # 2. Scale and center product image
+                        product_image.thumbnail((750, 750), Image.Resampling.LANCZOS)
+                        paste_x = (TARGET_CANVAS_SIZE[0] - product_image.width) // 2
+                        paste_y = (TARGET_CANVAS_SIZE[1] - product_image.height) // 2
                         
                         if product_image.mode == 'RGBA':
                             result_image.paste(product_image, (paste_x, paste_y), product_image)
                         else:
                             result_image.paste(product_image, (paste_x, paste_y))
                         
-                        # 3. Place pre-scaled tag at exact coordinates
+                        # 3. Place pre-scaled tag at exactly X=572, Y=40
                         if tag_resized.mode == 'RGBA':
                             result_image.paste(tag_resized, TAG_POS, tag_resized)
                         else:
@@ -511,14 +506,13 @@ else:  # Bulk Processing Mode
                 
                 if processed_images:
                     st.markdown("---")
-                    st.success(f"Successfully processed {len(processed_images)} images to uniform composition!")
+                    st.success(f"Successfully processed {len(processed_images)} images to uniform 800x800px composition!")
                     import zipfile
                     zip_buffer = BytesIO()
                     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
                         for img, name in processed_images:
                             img_buffer = BytesIO()
                             img.save(img_buffer, format='JPEG', quality=95)
-                            # Add suffix to all filenames
                             zip_file.writestr(
                                 f"{name}_age_restricted.jpg",
                                 img_buffer.getvalue()
@@ -527,7 +521,7 @@ else:  # Bulk Processing Mode
                     st.download_button(
                         label=f"Download All {len(processed_images)} Composite Images (ZIP)",
                         data=zip_buffer,
-                        file_name="age_restricted_composite_images.zip",
+                        file_name="age_restricted_composite_images_800x800.zip",
                         mime="application/zip",
                         use_container_width=True
                     )
@@ -548,7 +542,7 @@ st.markdown("---")
 st.markdown(
     f"""
     <div style='text-align: center; color: #666;'>
-    <p>Ensure the {TAG_FILE} file is in the script folder. Product images are centered on a fixed composition canvas.</p>
+    <p>Ensure the {TAG_FILE} file is in the script folder. Product images are centered on a fixed 800x800 canvas.</p>
     </div>
     """,
     unsafe_allow_html=True
