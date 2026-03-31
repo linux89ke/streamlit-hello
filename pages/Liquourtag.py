@@ -189,7 +189,7 @@ def scrape_jumia_category(category_url, max_items=20):
         if len(results) >= max_items:
             break
         
-        # Attempt to grab the actual Jumia SKU from data attributes
+        # Attempt to grab the actual SKU from data attributes
         sku = art.get('data-sku')
         if not sku:
             core_a = art.find('a', class_='core')
