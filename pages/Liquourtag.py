@@ -16,7 +16,7 @@ st.set_page_config(
 
 # Title and description
 st.title("18+ Age Restriction Tag Generator")
-st.markdown("Upload a product image and add an 18+ tag to the top right corner!")
+st.markdown("Upload a product image and add an 18+ tag. **Final images are automatically formatted to 800x800px.**")
 
 # Sidebar for tag selection
 st.sidebar.header("Tag Settings")
@@ -39,34 +39,36 @@ st.sidebar.header("Image Settings")
 if 'last_image_hash' not in st.session_state:
     st.session_state.last_image_hash = None
 if 'tag_scale_value' not in st.session_state:
-    st.session_state.tag_scale_value = 40  # Increased default to 40%
+    st.session_state.tag_scale_value = 30  # 30% looks great on an 800x800 canvas
 
 tag_scale = st.sidebar.slider(
-    "18+ Tag Size (% of image width):",
+    "18+ Tag Size (% of 800px canvas):",
     min_value=10,
-    max_value=100,  # Increased max limit to 100%
+    max_value=100,
     value=st.session_state.tag_scale_value,
     step=5,
     key="tag_scale_slider",
-    help="Adjust how large the 18+ tag appears on the product. Default is 40%"
+    help="Adjust how large the 18+ tag appears on the final 800x800 image."
 )
 st.session_state.tag_scale_value = tag_scale
 st.sidebar.caption(f"Current tag size: {tag_scale}%")
+
+# Constant for the required output size
+TARGET_SIZE = (800, 800)
 
 # Tag file mapping
 def get_tag_path(filename):
     """Check multiple possible locations for tag files"""
     possible_paths = [
-        filename,  # Same directory as script
-        os.path.join(os.path.dirname(__file__), filename),  # Script directory
-        os.path.join(os.getcwd(), filename),  # Current working directory
+        filename,  
+        os.path.join(os.path.dirname(__file__), filename),  
+        os.path.join(os.getcwd(), filename),  
     ]
     
     for path in possible_paths:
         if os.path.exists(path):
             return path
     
-    # If not found, return the filename (will show error)
     return filename
 
 tag_files = {
@@ -111,7 +113,6 @@ def get_chrome_options(headless=True):
         "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
 
-    # Detect browser binary
     possible_paths = [
         "/usr/bin/chromium", 
         "/usr/bin/chromium-browser", 
@@ -173,16 +174,13 @@ def search_jumia_by_sku(sku, base_url, search_url):
         return None
     
     try:
-        # Create driver
         driver = get_driver(headless=True)
         if not driver:
             st.error("Could not initialize browser driver")
             return None
         
-        # Go to search URL
         driver.get(search_url)
         
-        # Wait for page to load
         try:
             WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, "article.prd, h1"))
@@ -191,12 +189,10 @@ def search_jumia_by_sku(sku, base_url, search_url):
             st.error("Page load timeout")
             return None
         
-        # Check if no results
         if "There are no results for" in driver.page_source or "No results found" in driver.page_source:
             st.warning(f"No products found for SKU: {sku}")
             return None
         
-        # Find first product link
         try:
             product_links = driver.find_elements(By.CSS_SELECTOR, "article.prd a.core")
             if not product_links:
@@ -206,26 +202,20 @@ def search_jumia_by_sku(sku, base_url, search_url):
                 product_url = product_links[0].get_attribute("href")
                 driver.get(product_url)
                 
-                # Wait for product page to load
                 WebDriverWait(driver, 10).until(
                     EC.presence_of_element_located((By.TAG_NAME, "h1"))
                 )
                 
                 import time
-                time.sleep(1)  # Let images load
+                time.sleep(1) 
                 
-                # Get page source and parse
                 soup = BeautifulSoup(driver.page_source, 'html.parser')
-                
-                # Extract image URL
                 image_url = None
                 
-                # Method 1: og:image meta tag
                 og_image = soup.find('meta', property='og:image')
                 if og_image and og_image.get('content'):
                     image_url = og_image['content']
                 
-                # Method 2: Find main product images
                 if not image_url:
                     for img in soup.find_all('img', limit=15):
                         src = img.get('data-src') or img.get('src')
@@ -238,7 +228,6 @@ def search_jumia_by_sku(sku, base_url, search_url):
                             break
                 
                 if image_url:
-                    # Download the image
                     headers = {
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                         'Referer': base_url,
@@ -276,7 +265,6 @@ if processing_mode == "Single Image":
     with col1:
         st.subheader("Upload Product Image")
         
-        # Upload method selection
         upload_method = st.radio(
             "Choose upload method:",
             ["Upload from device", "Load from Image URL", "Load from SKU"]
@@ -290,14 +278,12 @@ if processing_mode == "Single Image":
                 type=["png", "jpg", "jpeg", "webp"]
             )
             if uploaded_file is not None:
-                # Generate hash for the uploaded file to detect changes
                 import hashlib
                 file_hash = hashlib.md5(uploaded_file.getvalue()).hexdigest()
                 
-                # Reset slider if this is a new image
                 if st.session_state.last_image_hash != file_hash:
                     st.session_state.last_image_hash = file_hash
-                    st.session_state.tag_scale_value = 40
+                    st.session_state.tag_scale_value = 30
                 
                 product_image = Image.open(uploaded_file).convert("RGBA")
         
@@ -305,10 +291,9 @@ if processing_mode == "Single Image":
             image_url = st.text_input("Enter image URL:")
             if image_url:
                 try:
-                    # Reset slider if this is a new URL
                     if st.session_state.last_image_hash != image_url:
                         st.session_state.last_image_hash = image_url
-                        st.session_state.tag_scale_value = 40
+                        st.session_state.tag_scale_value = 30
                     
                     response = requests.get(image_url)
                     product_image = Image.open(BytesIO(response.content)).convert("RGBA")
@@ -329,7 +314,6 @@ if processing_mode == "Single Image":
             )
             
             if sku_input:
-                # Determine the base URL
                 if jumia_site == "Jumia Kenya":
                     base_url = "https://www.jumia.co.ke"
                     search_url = f"https://www.jumia.co.ke/catalog/?q={sku_input}"
@@ -339,11 +323,10 @@ if processing_mode == "Single Image":
                 
                 if st.button("Search and Extract Image", use_container_width=True):
                     with st.spinner(f"Searching {jumia_site} for SKU..."):
-                        # Reset slider for new SKU search
                         sku_hash = f"{sku_input}_{jumia_site}"
                         if st.session_state.last_image_hash != sku_hash:
                             st.session_state.last_image_hash = sku_hash
-                            st.session_state.tag_scale_value = 40
+                            st.session_state.tag_scale_value = 30
                         
                         product_image = search_jumia_by_sku(sku_input, base_url, search_url)
                         if product_image:
@@ -352,7 +335,7 @@ if processing_mode == "Single Image":
                             st.error("Could not find product with this SKU")
 
     with col2:
-        st.subheader("Preview")
+        st.subheader("Preview (800x800px)")
         
         if product_image is not None:
             try:
@@ -371,30 +354,33 @@ if processing_mode == "Single Image":
                 
                 tag_image = Image.open(tag_path).convert("RGBA")
                 
-                # Get product dimensions
-                prod_width, prod_height = product_image.size
+                # 1. Create the fixed 800x800 white canvas
+                result_image = Image.new("RGB", TARGET_SIZE, (255, 255, 255))
                 
-                # Calculate new tag size based on slider percentage
-                tag_width = int(prod_width * (tag_scale / 100.0))
-                # Maintain aspect ratio of the tag
+                # 2. Resize the product image to fit inside 800x800 while keeping aspect ratio
+                product_image.thumbnail(TARGET_SIZE, Image.Resampling.LANCZOS)
+                
+                # Center the product image on the 800x800 canvas
+                paste_x = (TARGET_SIZE[0] - product_image.width) // 2
+                paste_y = (TARGET_SIZE[1] - product_image.height) // 2
+                
+                # Paste product image onto background
+                if product_image.mode == 'RGBA':
+                    result_image.paste(product_image, (paste_x, paste_y), product_image)
+                else:
+                    result_image.paste(product_image, (paste_x, paste_y))
+                
+                # 3. Calculate new tag size based on slider percentage against the 800px canvas
+                tag_width = int(TARGET_SIZE[0] * (tag_scale / 100.0))
                 tag_aspect_ratio = tag_image.size[1] / tag_image.size[0]
                 tag_height = int(tag_width * tag_aspect_ratio)
                 
                 # Resize tag
                 tag_resized = tag_image.resize((tag_width, tag_height), Image.Resampling.LANCZOS)
                 
-                # Create a solid background matching the product image size
-                result_image = Image.new("RGB", (prod_width, prod_height), (255, 255, 255))
-                
-                # Paste product image onto background
-                if product_image.mode == 'RGBA':
-                    result_image.paste(product_image, (0, 0), product_image)
-                else:
-                    result_image.paste(product_image, (0, 0))
-                
-                # Calculate position for top right corner (with slight padding)
-                padding = int(prod_width * 0.05) # 5% padding
-                tag_x = prod_width - tag_width - padding
+                # Calculate position for top right corner (with slight padding based on 800px canvas)
+                padding = int(TARGET_SIZE[0] * 0.03) # 3% padding of 800px = ~24px
+                tag_x = TARGET_SIZE[0] - tag_width - padding
                 tag_y = padding
                 
                 # Overlay tag onto the top right corner
@@ -415,7 +401,7 @@ if processing_mode == "Single Image":
                 buf.seek(0)
                 
                 st.download_button(
-                    label="Download Tagged Image (JPEG)",
+                    label="Download 800x800 Image (JPEG)",
                     data=buf,
                     file_name="18plus_tagged_product.jpg",
                     mime="image/jpeg",
@@ -429,14 +415,14 @@ if processing_mode == "Single Image":
 
 else:  # Bulk Processing Mode
     st.subheader("Bulk Processing")
-    st.markdown("Process multiple products at once")
+    st.markdown("Process multiple products at once into uniform 800x800px images")
     
     bulk_method = st.radio(
         "Choose bulk input method:",
         ["Upload multiple images", "Enter URLs manually", "Upload Excel file with URLs", "Enter SKUs"]
     )
     
-    products_to_process = []  # List of (image, filename) tuples
+    products_to_process = []  
     
     if bulk_method == "Upload multiple images":
         uploaded_files = st.file_uploader(
@@ -450,7 +436,7 @@ else:  # Bulk Processing Mode
             for idx, uploaded_file in enumerate(uploaded_files):
                 try:
                     img = Image.open(uploaded_file).convert("RGBA")
-                    filename = uploaded_file.name.rsplit('.', 1)[0]  # Remove extension
+                    filename = uploaded_file.name.rsplit('.', 1)[0]  
                     products_to_process.append((img, filename))
                 except Exception as e:
                     st.warning(f"Could not load {uploaded_file.name}: {str(e)}")
@@ -499,11 +485,9 @@ else:  # Bulk Processing Mode
                 import pandas as pd
                 df = pd.read_excel(excel_file)
                 
-                # Get the first column as URLs
                 if len(df.columns) > 0:
                     urls = df.iloc[:, 0].dropna().astype(str).tolist()
                     
-                    # Get product names if second column exists
                     if len(df.columns) > 1:
                         names = df.iloc[:, 1].dropna().astype(str).tolist()
                     else:
@@ -516,7 +500,6 @@ else:  # Bulk Processing Mode
                             response = requests.get(url, timeout=10)
                             response.raise_for_status()
                             img = Image.open(BytesIO(response.content)).convert("RGBA")
-                            # Clean filename
                             clean_name = re.sub(r'[^\w\s-]', '', name).strip().replace(' ', '_')
                             products_to_process.append((img, clean_name or f"product_{idx+1}"))
                         except Exception as e:
@@ -546,7 +529,6 @@ else:  # Bulk Processing Mode
             st.info(f"{len(skus)} SKUs entered")
             
             if st.button("Search All SKUs and Extract Images", use_container_width=True):
-                # Determine the base URL
                 if jumia_site_bulk == "Jumia Kenya":
                     base_url = "https://www.jumia.co.ke"
                 else:
@@ -577,11 +559,9 @@ else:  # Bulk Processing Mode
         
         st.info(f"Loaded {len(products_to_process)} images. Adjust the 18+ tag sizes as needed before processing.")
         
-        # Store individual scales in session state
         if 'individual_scales' not in st.session_state:
             st.session_state.individual_scales = {}
         
-        # Display images in a grid with controls
         cols_per_row = 3
         rows = (len(products_to_process) + cols_per_row - 1) // cols_per_row
         
@@ -593,13 +573,11 @@ else:  # Bulk Processing Mode
                     img, filename = products_to_process[idx]
                     
                     with cols[col_idx]:
-                        # Show thumbnail
                         st.image(img, caption=filename, use_container_width=True)
                         
-                        # Individual size slider for this image
                         key = f"scale_{idx}_{filename}"
                         if key not in st.session_state.individual_scales:
-                            st.session_state.individual_scales[key] = 40
+                            st.session_state.individual_scales[key] = 30
                         
                         scale = st.slider(
                             "Tag Size %",
@@ -615,14 +593,12 @@ else:  # Bulk Processing Mode
         
         st.markdown("---")
         
-        if st.button("Process All Images", use_container_width=True):
+        if st.button("Process All Images to 800x800", use_container_width=True):
             st.info(f"Processing {len(products_to_process)} images...")
             
-            # Create a progress bar
             progress_bar = st.progress(0)
             processed_images = []
             
-            # Get tag file
             try:
                 tag_filename = tag_files[tag_type]
                 tag_path = get_tag_path(tag_filename)
@@ -635,31 +611,32 @@ else:  # Bulk Processing Mode
                 
                 for idx, (product_image, filename) in enumerate(products_to_process):
                     try:
-                        # Get individual scale for this image
                         key = f"scale_{idx}_{filename}"
-                        individual_scale = st.session_state.individual_scales.get(key, 40)
+                        individual_scale = st.session_state.individual_scales.get(key, 30)
                         
-                        prod_width, prod_height = product_image.size
-                        result_image = Image.new("RGB", (prod_width, prod_height), (255, 255, 255))
+                        # 1. Create fixed 800x800 canvas
+                        result_image = Image.new("RGB", TARGET_SIZE, (255, 255, 255))
                         
-                        # Paste product
+                        # 2. Scale product and center it
+                        product_image.thumbnail(TARGET_SIZE, Image.Resampling.LANCZOS)
+                        paste_x = (TARGET_SIZE[0] - product_image.width) // 2
+                        paste_y = (TARGET_SIZE[1] - product_image.height) // 2
+                        
                         if product_image.mode == 'RGBA':
-                            result_image.paste(product_image, (0, 0), product_image)
+                            result_image.paste(product_image, (paste_x, paste_y), product_image)
                         else:
-                            result_image.paste(product_image, (0, 0))
+                            result_image.paste(product_image, (paste_x, paste_y))
                         
-                        # Scale tag
-                        tag_width = int(prod_width * (individual_scale / 100.0))
+                        # 3. Scale and overlay tag
+                        tag_width = int(TARGET_SIZE[0] * (individual_scale / 100.0))
                         tag_aspect_ratio = tag_image.size[1] / tag_image.size[0]
                         tag_height = int(tag_width * tag_aspect_ratio)
                         tag_resized = tag_image.resize((tag_width, tag_height), Image.Resampling.LANCZOS)
                         
-                        # Position top right
-                        padding = int(prod_width * 0.05)
-                        tag_x = prod_width - tag_width - padding
+                        padding = int(TARGET_SIZE[0] * 0.03)
+                        tag_x = TARGET_SIZE[0] - tag_width - padding
                         tag_y = padding
                         
-                        # Overlay tag
                         if tag_resized.mode == 'RGBA':
                             result_image.paste(tag_resized, (tag_x, tag_y), tag_resized)
                         else:
@@ -670,15 +647,12 @@ else:  # Bulk Processing Mode
                     except Exception as e:
                         st.warning(f"Error processing {filename}: {str(e)}")
                     
-                    # Update progress
                     progress_bar.progress((idx + 1) / len(products_to_process))
                 
-                # Show results and download options
                 if processed_images:
                     st.markdown("---")
-                    st.success(f"Successfully processed {len(processed_images)} images!")
+                    st.success(f"Successfully processed {len(processed_images)} images to 800x800px!")
                     
-                    # Create a zip file with all images
                     import zipfile
                     zip_buffer = BytesIO()
                     
@@ -696,15 +670,14 @@ else:  # Bulk Processing Mode
                     st.download_button(
                         label=f"Download All {len(processed_images)} Images (ZIP)",
                         data=zip_buffer,
-                        file_name="18plus_tagged_products.zip",
+                        file_name="18plus_tagged_products_800x800.zip",
                         mime="application/zip",
                         use_container_width=True
                     )
                     
-                    # Show preview of processed images
                     st.markdown("### Preview")
                     cols = st.columns(3)
-                    for idx, (img, name) in enumerate(processed_images[:9]):  # Show first 9
+                    for idx, (img, name) in enumerate(processed_images[:9]):  
                         with cols[idx % 3]:
                             st.image(img, caption=name, use_container_width=True)
                             
