@@ -28,12 +28,6 @@ processing_mode = st.sidebar.radio(
     ["Single Image", "Bulk Processing"]
 )
 
-st.sidebar.markdown("---")
-st.sidebar.header("Image Settings")
-st.sidebar.caption("Composition uses a fixed 800x800px transparent overlay.")
-st.sidebar.markdown("- **Final Canvas**: 800x800px")
-st.sidebar.markdown("- **Smart Trim**: Active (Auto-crops white space)")
-st.sidebar.markdown("- **Product Margins**: 60px top & bottom (680px constraint)")
 
 st.sidebar.markdown("---")
 st.sidebar.header("Advanced Clean-up")
