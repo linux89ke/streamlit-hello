@@ -2,9 +2,13 @@ import streamlit as st
 from PIL import Image
 import requests
 from io import BytesIO
+import numpy as np
 import os
 import re
 from bs4 import BeautifulSoup
+import concurrent.futures
+import pandas as pd
+import time
 
 # Page config
 st.set_page_config(
@@ -28,17 +32,32 @@ st.sidebar.markdown("---")
 st.sidebar.header("Image Settings")
 st.sidebar.caption("Composition uses a fixed 800x800px transparent overlay.")
 st.sidebar.markdown("- **Final Canvas**: 800x800px")
-st.sidebar.caption("Product images are centered and scaled to fit the canvas beneath your custom overlay.")
+st.sidebar.markdown("- **Smart Trim**: Active (Auto-crops white space)")
 
 # Tag file definition
 TAG_FILE = "NSFW-18++-Tag.png"
-
-# Fixed final canvas size
 TARGET_CANVAS_SIZE = (800, 800)
+
+def crop_white_space(img):
+    """Smart Trim: Removes massive white borders from product images."""
+    if img.mode == 'RGBA':
+        bg = Image.new('RGB', img.size, (255, 255, 255))
+        bg.paste(img, mask=img.split()[3])
+        img_data = np.array(bg)
+    else:
+        img_data = np.array(img.convert('RGB'))
+        
+    mask = img_data < 245
+    if not mask.any():
+        return img
+        
+    coords = np.argwhere(mask.any(axis=-1))
+    y0, x0 = coords.min(axis=0)
+    y1, x1 = coords.max(axis=0) + 1
+    return img.crop((x0, y0, x1, y1))
 
 @st.cache_resource
 def get_driver_path():
-    """Cache driver installation."""
     try:
         from webdriver_manager.chrome import ChromeDriverManager
         from webdriver_manager.core.os_manager import ChromeType
@@ -51,13 +70,10 @@ def get_driver_path():
             return None
 
 def get_chrome_options(headless=True):
-    """Configure Chrome options for stability."""
     from selenium.webdriver.chrome.options import Options
-    
     chrome_options = Options()
     if headless:
         chrome_options.add_argument("--headless=new")
-    
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
@@ -68,37 +84,25 @@ def get_chrome_options(headless=True):
     chrome_options.add_argument("--disable-logging")
     chrome_options.add_argument("--log-level=3")
     chrome_options.add_argument("--silent")
-    
-    chrome_options.add_argument(
-        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    )
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
-    possible_paths = [
-        "/usr/bin/chromium", 
-        "/usr/bin/chromium-browser", 
-        "/usr/bin/google-chrome-stable",
-        "/usr/bin/google-chrome"
-    ]
+    possible_paths = ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome-stable", "/usr/bin/google-chrome"]
     for path in possible_paths:
         if os.path.exists(path):
             chrome_options.binary_location = path
             break
-    
     return chrome_options
 
 def get_driver(headless=True):
-    """Create WebDriver with comprehensive error handling."""
     try:
         from selenium import webdriver
         from selenium.webdriver.chrome.service import Service
     except ImportError:
-        st.error("Selenium not installed. Install with: pip install selenium webdriver-manager")
+        st.error("Selenium not installed.")
         return None
     
     chrome_options = get_chrome_options(headless)
     driver = None
-    
     try:
         driver_path = get_driver_path()
         if driver_path:
@@ -118,435 +122,324 @@ def get_driver(headless=True):
             driver.implicitly_wait(5)
         except Exception:
             pass
-    
     return driver
 
+def scrape_jumia_category(category_url, max_items=20):
+    """Scrapes images directly from a Jumia category grid."""
+    driver = get_driver(headless=True)
+    if not driver:
+        return []
+    
+    driver.get(category_url)
+    time.sleep(2)  # Allow initial load
+    
+    # Scroll multiple times to trigger lazy loading for up to max_items
+    for _ in range(3):
+        driver.execute_script("window.scrollBy(0, 1500);")
+        time.sleep(1)
+        
+    soup = BeautifulSoup(driver.page_source, 'html.parser')
+    driver.quit()
+    
+    articles = soup.find_all('article', class_='prd')
+    results = []
+    
+    for art in articles:
+        if len(results) >= max_items:
+            break
+        img_tag = art.find('img', class_='img')
+        if img_tag:
+            name = img_tag.get('alt', 'product').strip()
+            # Jumia uses data-src for lazy loaded images
+            img_url = img_tag.get('data-src') or img_tag.get('src')
+            if img_url and not img_url.endswith('data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'):
+                clean_name = re.sub(r'[^\w\s-]', '', name).strip().replace(' ', '_')
+                results.append((clean_name, img_url))
+                
+    return results
+
 def search_jumia_by_sku(sku, base_url, search_url):
-    """Search Jumia by SKU using Selenium to bypass 403 errors"""
-    driver = None
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    from selenium.common.exceptions import TimeoutException
+    
+    driver = get_driver(headless=True)
+    if not driver: return None
     
     try:
-        from selenium.webdriver.common.by import By
-        from selenium.webdriver.support.ui import WebDriverWait
-        from selenium.webdriver.support import expected_conditions as EC
-        from selenium.common.exceptions import TimeoutException
-    except ImportError:
-        st.error("Selenium not installed. Install with: pip install selenium webdriver-manager")
-        return None
-    
-    try:
-        driver = get_driver(headless=True)
-        if not driver:
-            st.error("Could not initialize browser driver")
-            return None
-        
         driver.get(search_url)
-        
         try:
-            WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "article.prd, h1"))
-            )
-        except TimeoutException:
-            st.error("Page load timeout")
-            return None
+            WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "article.prd, h1")))
+        except TimeoutException: return None
         
-        if "There are no results for" in driver.page_source or "No results found" in driver.page_source:
-            st.warning(f"No products found for SKU: {sku}")
-            return None
+        product_links = driver.find_elements(By.CSS_SELECTOR, "article.prd a.core")
+        if not product_links:
+            product_links = driver.find_elements(By.CSS_SELECTOR, "a[href*='.html']")
         
-        try:
-            product_links = driver.find_elements(By.CSS_SELECTOR, "article.prd a.core")
-            if not product_links:
-                product_links = driver.find_elements(By.CSS_SELECTOR, "a[href*='.html']")
+        if product_links:
+            product_url = product_links[0].get_attribute("href")
+            driver.get(product_url)
+            WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "h1")))
+            time.sleep(1) 
             
-            if product_links:
-                product_url = product_links[0].get_attribute("href")
-                driver.get(product_url)
-                
-                WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.TAG_NAME, "h1"))
-                )
-                
-                import time
-                time.sleep(1) 
-                
-                soup = BeautifulSoup(driver.page_source, 'html.parser')
-                image_url = None
-                
-                og_image = soup.find('meta', property='og:image')
-                if og_image and og_image.get('content'):
-                    image_url = og_image['content']
-                
-                if not image_url:
-                    for img in soup.find_all('img', limit=15):
-                        src = img.get('data-src') or img.get('src')
-                        if src and ('/product/' in src or '/unsafe/' in src or 'jumia.is' in src):
-                            if src.startswith('//'):
-                                src = 'https:' + src
-                            elif src.startswith('/'):
-                                src = base_url + src
-                            image_url = src
-                            break
-                
-                if image_url:
-                    headers = {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                        'Referer': base_url,
-                    }
-                    
-                    img_response = requests.get(image_url, headers=headers, timeout=15)
-                    img_response.raise_for_status()
-                    
-                    return Image.open(BytesIO(img_response.content)).convert("RGBA")
-                else:
-                    st.warning("Found product but could not extract image")
-                    return None
-            else:
-                st.warning(f"No products found for SKU: {sku}")
-                return None
-                
-        except Exception as e:
-            st.error(f"Error finding product: {str(e)}")
-            return None
+            soup = BeautifulSoup(driver.page_source, 'html.parser')
+            image_url = None
+            og_image = soup.find('meta', property='og:image')
+            if og_image and og_image.get('content'):
+                image_url = og_image['content']
             
-    except Exception as e:
-        st.error(f"Error: {str(e)}")
+            if not image_url:
+                for img in soup.find_all('img', limit=15):
+                    src = img.get('data-src') or img.get('src')
+                    if src and ('/product/' in src or '/unsafe/' in src or 'jumia.is' in src):
+                        if src.startswith('//'): src = 'https:' + src
+                        elif src.startswith('/'): src = base_url + src
+                        image_url = src
+                        break
+            
+            if image_url:
+                headers = {'User-Agent': 'Mozilla/5.0'}
+                img_response = requests.get(image_url, headers=headers, timeout=15)
+                img_response.raise_for_status()
+                return Image.open(BytesIO(img_response.content)).convert("RGBA")
+        return None
+    except Exception:
         return None
     finally:
-        if driver:
-            try:
-                driver.quit()
-            except Exception:
-                pass
+        driver.quit()
 
-# Main content area
+# ----------------- SINGLE IMAGE MODE -----------------
 if processing_mode == "Single Image":
     col1, col2 = st.columns(2)
-
     with col1:
         st.subheader("Upload Product Image")
-        
-        upload_method = st.radio(
-            "Choose upload method:",
-            ["Upload from device", "Load from Image URL", "Load from SKU"]
-        )
-        
+        upload_method = st.radio("Choose upload method:", ["Upload from device", "Load from Image URL", "Load from SKU"])
         product_image = None
         
         if upload_method == "Upload from device":
-            uploaded_file = st.file_uploader(
-                "Choose an image file",
-                type=["png", "jpg", "jpeg", "webp"]
-            )
-            if uploaded_file is not None:
-                product_image = Image.open(uploaded_file).convert("RGBA")
-        
+            uploaded_file = st.file_uploader("Choose an image file", type=["png", "jpg", "jpeg", "webp"])
+            if uploaded_file: product_image = Image.open(uploaded_file).convert("RGBA")
         elif upload_method == "Load from Image URL":
             image_url = st.text_input("Enter image URL:")
             if image_url:
                 try:
-                    response = requests.get(image_url)
-                    product_image = Image.open(BytesIO(response.content)).convert("RGBA")
-                    st.success("Image loaded successfully!")
-                except Exception as e:
-                    st.error(f"Error loading image: {str(e)}")
-        
-        else:  # Load from SKU
-            sku_input = st.text_input(
-                "Enter Product SKU:",
-                placeholder="e.g., GE840EA6C62GANAFAMZ"
-            )
-            jumia_site = st.radio(
-                "Select Jumia Site:",
-                ["Jumia Kenya", "Jumia Uganda"],
-                horizontal=True
-            )
-            if sku_input:
-                if jumia_site == "Jumia Kenya":
-                    base_url = "https://www.jumia.co.ke"
-                    search_url = f"https://www.jumia.co.ke/catalog/?q={sku_input}"
-                else:
-                    base_url = "https://www.jumia.ug"
-                    search_url = f"https://www.jumia.ug/catalog/?q={sku_input}"
-                
-                if st.button("Search and Extract Image", use_container_width=True):
-                    with st.spinner(f"Searching {jumia_site} for SKU..."):
-                        product_image = search_jumia_by_sku(sku_input, base_url, search_url)
-                        if product_image:
-                            st.success("Image found and loaded successfully!")
-                        else:
-                            st.error("Could not find product with this SKU")
+                    product_image = Image.open(BytesIO(requests.get(image_url).content)).convert("RGBA")
+                    st.success("Loaded successfully!")
+                except: st.error("Error loading image.")
+        else:
+            sku_input = st.text_input("Enter Product SKU:")
+            jumia_site = st.radio("Select Jumia Site:", ["Jumia Kenya", "Jumia Uganda"], horizontal=True)
+            if sku_input and st.button("Search and Extract", use_container_width=True):
+                with st.spinner("Searching..."):
+                    base_url = "https://www.jumia.co.ke" if jumia_site == "Jumia Kenya" else "https://www.jumia.ug"
+                    search_url = f"{base_url}/catalog/?q={sku_input}"
+                    product_image = search_jumia_by_sku(sku_input, base_url, search_url)
+                    if product_image: st.success("Found!")
+                    else: st.error("Not found.")
 
     with col2:
         st.subheader("Preview (Fixed Composition: 800x800px)")
-        
         if product_image is not None:
-            try:
-                tag_path = TAG_FILE
-                if not os.path.exists(tag_path):
-                    tag_path = os.path.join(os.path.dirname(__file__), TAG_FILE)
-                
-                if not os.path.exists(tag_path):
-                    st.error(f"Overlay file not found: {TAG_FILE}")
-                    st.info(f"Please make sure your 800x800 {TAG_FILE} file is in the same directory as this script.")
-                    st.stop()
-                
-                # Load the 800x800 transparent overlay
-                tag_image = Image.open(tag_path).convert("RGBA")
-                
-                # Force the overlay to exactly 800x800 just in case
-                if tag_image.size != TARGET_CANVAS_SIZE:
-                    tag_image = tag_image.resize(TARGET_CANVAS_SIZE, Image.Resampling.LANCZOS)
-                
-                # 1. Start with a clean fixed 800x800 canvas
-                result_image = Image.new("RGB", TARGET_CANVAS_SIZE, (255, 255, 255))
-                
-                # 2. Scale and place the product image
-                product_image.thumbnail((750, 750), Image.Resampling.LANCZOS)
-                
-                # Center the product image horizontally and vertically
-                paste_x = (TARGET_CANVAS_SIZE[0] - product_image.width) // 2
-                paste_y = (TARGET_CANVAS_SIZE[1] - product_image.height) // 2
-                
-                if product_image.mode == 'RGBA':
-                    result_image.paste(product_image, (paste_x, paste_y), product_image)
-                else:
-                    result_image.paste(product_image, (paste_x, paste_y))
-                
-                # 3. Slap the 800x800 transparent overlay perfectly on top
-                result_image.paste(tag_image, (0, 0), tag_image)
-                
-                # Display the result
-                st.image(result_image, use_container_width=True)
-                
-                # Download button
-                st.markdown("---")
-                buf = BytesIO()
-                result_image.save(buf, format="JPEG", quality=95)
-                buf.seek(0)
-                st.download_button(
-                    label="Download Composite Image (JPEG)",
-                    data=buf,
-                    file_name="age_restricted_product_800x800.jpg",
-                    mime="image/jpeg",
-                    use_container_width=True
-                )
-                
-            except Exception as e:
-                st.error(f"Error processing image: {str(e)}")
-        else:
-            st.info("Upload or provide a URL for a product image to get started!")
+            tag_path = TAG_FILE if os.path.exists(TAG_FILE) else os.path.join(os.path.dirname(__file__), TAG_FILE)
+            if not os.path.exists(tag_path):
+                st.error(f"Overlay file not found: {TAG_FILE}")
+                st.stop()
+            
+            tag_image = Image.open(tag_path).convert("RGBA")
+            if tag_image.size != TARGET_CANVAS_SIZE:
+                tag_image = tag_image.resize(TARGET_CANVAS_SIZE, Image.Resampling.LANCZOS)
+            
+            result_image = Image.new("RGB", TARGET_CANVAS_SIZE, (255, 255, 255))
+            product_image = crop_white_space(product_image)
+            product_image.thumbnail((750, 750), Image.Resampling.LANCZOS)
+            
+            paste_x = (TARGET_CANVAS_SIZE[0] - product_image.width) // 2
+            paste_y = (TARGET_CANVAS_SIZE[1] - product_image.height) // 2
+            
+            if product_image.mode == 'RGBA': result_image.paste(product_image, (paste_x, paste_y), product_image)
+            else: result_image.paste(product_image, (paste_x, paste_y))
+            
+            result_image.paste(tag_image, (0, 0), tag_image)
+            st.image(result_image, use_container_width=True)
+            
+            buf = BytesIO()
+            result_image.save(buf, format="JPEG", quality=95)
+            st.download_button("Download Image", buf.getvalue(), "age_restricted_800x800.jpg", "image/jpeg", use_container_width=True)
 
-else:  # Bulk Processing Mode
-    st.subheader("Bulk Processing (to Fixed 800x800px Composition)")
-    st.markdown("Process multiple product images at once into a uniform composite.")
-    
+# ----------------- BULK PROCESSING MODE -----------------
+else:
+    st.subheader("Bulk Processing (to Fixed 800x800px)")
     bulk_method = st.radio(
         "Choose bulk input method:",
-        ["Upload multiple images", "Enter URLs manually", "Upload Excel file with URLs", "Enter SKUs"]
+        ["Upload multiple images", "Enter URLs manually", "Upload Smart Excel", "Enter SKUs", "Jumia Category URL (Auto-Scrape)"]
     )
     
     products_to_process = []
     
     if bulk_method == "Upload multiple images":
-        uploaded_files = st.file_uploader(
-            "Choose multiple image files",
-            type=["png", "jpg", "jpeg", "webp"],
-            accept_multiple_files=True
-        )
+        uploaded_files = st.file_uploader("Choose multiple files", type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True)
         if uploaded_files:
-            st.info(f"{len(uploaded_files)} files uploaded")
-            for idx, uploaded_file in enumerate(uploaded_files):
-                try:
-                    img = Image.open(uploaded_file).convert("RGBA")
-                    filename = uploaded_file.name.rsplit('.', 1)[0]  
-                    products_to_process.append((img, filename))
-                except Exception as e:
-                    st.warning(f"Could not load {uploaded_file.name}: {str(e)}")
-    
+            for f in uploaded_files:
+                products_to_process.append((Image.open(f).convert("RGBA"), f.name.rsplit('.', 1)[0]))
+                
     elif bulk_method == "Enter URLs manually":
-        urls_input = st.text_area(
-            "Enter image URLs (one per line):",
-            height=200,
-            placeholder="https://example.com/image1.jpg\nhttps://example.com/image2.jpg\nhttps://example.com/image3.jpg"
-        )
+        urls_input = st.text_area("Enter image URLs (one per line):")
         if urls_input.strip():
-            urls = [url.strip() for url in urls_input.split('\n') if url.strip()]
-            st.info(f"{len(urls)} URLs entered")
+            urls = [u.strip() for u in urls_input.split('\n') if u.strip()]
             for idx, url in enumerate(urls):
                 try:
-                    response = requests.get(url, timeout=10)
-                    response.raise_for_status()
-                    img = Image.open(BytesIO(response.content)).convert("RGBA")
-                    filename = f"image_{idx+1}"
-                    products_to_process.append((img, filename))
-                except Exception as e:
-                    st.warning(f"Could not load {url}: {str(e)}")
-    
-    elif bulk_method == "Upload Excel file with URLs":
-        excel_file = st.file_uploader(
-            "Upload Excel file (.xlsx or .xls)",
-            type=["xlsx", "xls"]
-        )
+                    img = Image.open(BytesIO(requests.get(url, timeout=10).content)).convert("RGBA")
+                    products_to_process.append((img, f"image_{idx+1}"))
+                except: pass
+
+    elif bulk_method == "Upload Smart Excel":
+        st.caption("Auto-detects columns named 'URL', 'Link', 'SKU', and 'Name'.")
+        excel_file = st.file_uploader("Upload Excel", type=["xlsx", "xls"])
         if excel_file:
-            try:
-                import pandas as pd
-                df = pd.read_excel(excel_file)
-                if len(df.columns) > 0:
-                    urls = df.iloc[:, 0].dropna().astype(str).tolist()
-                    if len(df.columns) > 1:
-                        names = df.iloc[:, 1].dropna().astype(str).tolist()
-                    else:
-                        names = [f"product_{i+1}" for i in range(len(urls))]
-                    st.info(f"Found {len(urls)} URLs in Excel file")
-                    for idx, (url, name) in enumerate(zip(urls, names)):
-                        try:
-                            response = requests.get(url, timeout=10)
-                            response.raise_for_status()
-                            img = Image.open(BytesIO(response.content)).convert("RGBA")
-                            clean_name = re.sub(r'[^\w\s-]', '', name).strip().replace(' ', '_')
-                            products_to_process.append((img, clean_name or f"product_{idx+1}"))
-                        except Exception as e:
-                            st.warning(f"Could not load {name}: {str(e)}")
-                else:
-                    st.error("Excel file appears to be empty")
-            except Exception as e:
-                st.error(f"Error reading Excel file: {str(e)}")
-    
-    else:  # Enter SKUs
-        skus_input = st.text_area(
-            "Enter Product SKUs (one per line):",
-            height=200,
-            placeholder="GE840EA6C62GANAFAMZ\nAP456EA7D89HANAFAMZ\nXY123EA4B56CANAFAMZ"
-        )
-        jumia_site_bulk = st.radio(
-            "Select Jumia Site:",
-            ["Jumia Kenya", "Jumia Uganda"],
-            horizontal=True,
-            key="bulk_jumia_site"
-        )
-        if skus_input.strip():
-            skus = [sku.strip() for sku in skus_input.split('\n') if sku.strip()]
-            st.info(f"{len(skus)} SKUs entered")
-            if st.button("Search All SKUs and Extract Images", use_container_width=True):
-                if jumia_site_bulk == "Jumia Kenya":
-                    base_url = "https://www.jumia.co.ke"
-                else:
-                    base_url = "https://www.jumia.ug"
-                progress = st.progress(0)
-                status_text = st.empty()
-                for idx, sku in enumerate(skus):
-                    status_text.text(f"Processing SKU {idx+1}/{len(skus)}: {sku}")
-                    search_url = f"{base_url}/catalog/?q={sku}"
-                    img = search_jumia_by_sku(sku, base_url, search_url)
-                    if img:
-                        filename = sku
-                        products_to_process.append((img, filename))
-                    else:
-                        st.warning(f"Could not find image for SKU: {sku}")
-                    progress.progress((idx + 1) / len(skus))
-                status_text.text(f"Completed! Found {len(products_to_process)} images out of {len(skus)} SKUs")
-    
-    # Process button
+            df = pd.read_excel(excel_file)
+            
+            url_col, sku_col, name_col = None, None, None
+            for col in df.columns:
+                c_low = str(col).lower()
+                if 'url' in c_low or 'link' in c_low or 'image' in c_low: url_col = col
+                elif 'sku' in c_low: sku_col = col
+                elif 'name' in c_low or 'title' in c_low: name_col = col
+            
+            # Fallbacks
+            if not url_col and not sku_col and len(df.columns) > 0: url_col = df.columns[0]
+            if not name_col and len(df.columns) > 1: name_col = df.columns[1]
+            
+            progress = st.progress(0)
+            status = st.empty()
+            
+            for idx, row in df.iterrows():
+                name = str(row[name_col]) if name_col else f"product_{idx+1}"
+                clean_name = re.sub(r'[^\w\s-]', '', name).strip().replace(' ', '_')
+                
+                img = None
+                if url_col and pd.notna(row[url_col]):
+                    try: img = Image.open(BytesIO(requests.get(str(row[url_col]), timeout=10).content)).convert("RGBA")
+                    except: pass
+                elif sku_col and pd.notna(row[sku_col]):
+                    sku = str(row[sku_col])
+                    img = search_jumia_by_sku(sku, "https://www.jumia.co.ke", f"https://www.jumia.co.ke/catalog/?q={sku}")
+                
+                if img: products_to_process.append((img, clean_name))
+                progress.progress((idx + 1) / len(df))
+                status.text(f"Processed row {idx+1}/{len(df)}")
+                
+    elif bulk_method == "Enter SKUs":
+        skus_input = st.text_area("Enter SKUs:")
+        site = st.radio("Site:", ["Jumia Kenya", "Jumia Uganda"], horizontal=True)
+        if skus_input.strip() and st.button("Extract SKUs"):
+            skus = [s.strip() for s in skus_input.split('\n') if s.strip()]
+            base_url = "https://www.jumia.co.ke" if site == "Jumia Kenya" else "https://www.jumia.ug"
+            
+            prog = st.progress(0)
+            stat = st.empty()
+            
+            def fetch(sku):
+                return sku, search_jumia_by_sku(sku, base_url, f"{base_url}/catalog/?q={sku}")
+                
+            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as x:
+                futs = {x.submit(fetch, s): s for s in skus}
+                for i, f in enumerate(concurrent.futures.as_completed(futs)):
+                    sku, img = f.result()
+                    if img: products_to_process.append((img, sku))
+                    prog.progress((i+1)/len(skus))
+                    stat.text(f"Scraped {i+1}/{len(skus)} SKUs")
+
+    elif bulk_method == "Jumia Category URL (Auto-Scrape)":
+        cat_url = st.text_input("Paste Jumia Category URL (e.g., https://www.jumia.co.ke/beers/)")
+        max_limit = st.slider("Max items to scrape", 10, 100, 30, step=10)
+        
+        if cat_url and st.button("Scrape Category"):
+            with st.spinner("Extracting category grid..."):
+                scraped_data = scrape_jumia_category(cat_url, max_limit)
+                
+            if not scraped_data:
+                st.error("No images found. Check URL.")
+            else:
+                prog = st.progress(0)
+                stat = st.empty()
+                def fetch_img(name, url):
+                    try: return name, Image.open(BytesIO(requests.get(url, timeout=10).content)).convert("RGBA")
+                    except: return name, None
+                
+                with concurrent.futures.ThreadPoolExecutor(max_workers=5) as x:
+                    futs = [x.submit(fetch_img, n, u) for n, u in scraped_data]
+                    for i, f in enumerate(concurrent.futures.as_completed(futs)):
+                        n, img = f.result()
+                        if img: products_to_process.append((img, n))
+                        prog.progress((i+1)/len(scraped_data))
+                        stat.text(f"Downloaded {i+1}/{len(scraped_data)} category images")
+
+    # ----- PROCESSING AND LIVE PREVIEW -----
     if products_to_process:
         st.markdown("---")
-        st.subheader("Process to Fixed Composition")
-        st.info(f"Loaded {len(products_to_process)} product images. Click to composite.")
+        st.subheader("Process & Preview")
         
-        # Display clean preview grid
-        cols_per_row = 3
-        rows = (len(products_to_process) + cols_per_row - 1) // cols_per_row
-        for row in range(rows):
-            cols = st.columns(cols_per_row)
-            for col_idx in range(cols_per_row):
-                idx = row * cols_per_row + col_idx
-                if idx < len(products_to_process):
-                    img, filename = products_to_process[idx]
-                    with cols[col_idx]:
-                        st.image(img, caption=filename, use_container_width=True)
+        # Batch Rename Pattern
+        rename_pattern = st.text_input("Renaming Pattern (Use {original} for original name/SKU):", value="{original}_18plus")
         
-        st.markdown("---")
-        if st.button("Process All to 800x800", use_container_width=True):
-            st.info(f"Processing {len(products_to_process)} images...")
-            progress_bar = st.progress(0)
+        if st.button("Generate Composites", type="primary", use_container_width=True):
+            tag_path = TAG_FILE if os.path.exists(TAG_FILE) else os.path.join(os.path.dirname(__file__), TAG_FILE)
+            if not os.path.exists(tag_path):
+                st.error(f"Overlay file not found: {TAG_FILE}")
+                st.stop()
+                
+            tag_image = Image.open(tag_path).convert("RGBA")
+            if tag_image.size != TARGET_CANVAS_SIZE:
+                tag_image = tag_image.resize(TARGET_CANVAS_SIZE, Image.Resampling.LANCZOS)
+
             processed_images = []
-            try:
-                tag_path = TAG_FILE
-                if not os.path.exists(tag_path):
-                    tag_path = os.path.join(os.path.dirname(__file__), TAG_FILE)
-                if not os.path.exists(tag_path):
-                    st.error(f"Overlay file not found: {TAG_FILE}")
-                    st.stop()
+            
+            # Setup Live Preview Grid
+            st.markdown("### Live Preview")
+            preview_container = st.container()
+            cols_per_row = 4
+            
+            prog = st.progress(0)
+            
+            for idx, (img, fname) in enumerate(products_to_process):
+                # Process
+                res = Image.new("RGB", TARGET_CANVAS_SIZE, (255, 255, 255))
+                img = crop_white_space(img)
+                img.thumbnail((750, 750), Image.Resampling.LANCZOS)
                 
-                # Load the transparent overlay
-                tag_image = Image.open(tag_path).convert("RGBA")
-                if tag_image.size != TARGET_CANVAS_SIZE:
-                    tag_image = tag_image.resize(TARGET_CANVAS_SIZE, Image.Resampling.LANCZOS)
-
-                for idx, (product_image, filename) in enumerate(products_to_process):
-                    try:
-                        # 1. Create 800x800 canvas
-                        result_image = Image.new("RGB", TARGET_CANVAS_SIZE, (255, 255, 255))
-                        
-                        # 2. Scale and center product image
-                        product_image.thumbnail((750, 750), Image.Resampling.LANCZOS)
-                        paste_x = (TARGET_CANVAS_SIZE[0] - product_image.width) // 2
-                        paste_y = (TARGET_CANVAS_SIZE[1] - product_image.height) // 2
-                        
-                        if product_image.mode == 'RGBA':
-                            result_image.paste(product_image, (paste_x, paste_y), product_image)
-                        else:
-                            result_image.paste(product_image, (paste_x, paste_y))
-                        
-                        # 3. Slap the overlay right on top
-                        result_image.paste(tag_image, (0, 0), tag_image)
-                        
-                        processed_images.append((result_image, filename))
-                        
-                    except Exception as e:
-                        st.warning(f"Error processing {filename}: {str(e)}")
-                    progress_bar.progress((idx + 1) / len(products_to_process))
+                px = (TARGET_CANVAS_SIZE[0] - img.width) // 2
+                py = (TARGET_CANVAS_SIZE[1] - img.height) // 2
                 
-                if processed_images:
-                    st.markdown("---")
-                    st.success(f"Successfully processed {len(processed_images)} images to uniform 800x800px composition!")
-                    import zipfile
-                    zip_buffer = BytesIO()
-                    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-                        for img, name in processed_images:
-                            img_buffer = BytesIO()
-                            img.save(img_buffer, format='JPEG', quality=95)
-                            zip_file.writestr(
-                                f"{name}_age_restricted.jpg",
-                                img_buffer.getvalue()
-                            )
-                    zip_buffer.seek(0)
-                    st.download_button(
-                        label=f"Download All {len(processed_images)} Composite Images (ZIP)",
-                        data=zip_buffer,
-                        file_name="age_restricted_composite_images_800x800.zip",
-                        mime="application/zip",
-                        use_container_width=True
-                    )
-                    st.markdown("### Preview (of first 9)")
-                    cols = st.columns(3)
-                    for idx, (img, name) in enumerate(processed_images[:9]):  
-                        with cols[idx % 3]:
-                            st.image(img, caption=name, use_container_width=True)
-                else:
-                    st.error("No images were successfully processed")
-            except Exception as e:
-                st.error(f"Error during bulk processing: {str(e)}")
-    else:
-        st.info("Please provide product images to process")
-
-# Footer
-st.markdown("---")
-st.markdown(
-    f"""
-    <div style='text-align: center; color: #666;'>
-    <p>Ensure your 800x800px transparent {TAG_FILE} file is in the script folder.</p>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+                if img.mode == 'RGBA': res.paste(img, (px, py), img)
+                else: res.paste(img, (px, py))
+                
+                res.paste(tag_image, (0, 0), tag_image)
+                
+                final_name = rename_pattern.replace("{original}", fname)
+                processed_images.append((res, final_name))
+                
+                # Live Preview
+                if idx % cols_per_row == 0:
+                    current_cols = preview_container.columns(cols_per_row)
+                current_cols[idx % cols_per_row].image(res, caption=final_name, use_container_width=True)
+                
+                prog.progress((idx + 1) / len(products_to_process))
+                
+            # Zip and Download
+            import zipfile
+            zip_buffer = BytesIO()
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for img, name in processed_images:
+                    img_buf = BytesIO()
+                    img.save(img_buf, format='JPEG', quality=95)
+                    zf.writestr(f"{name}.jpg", img_buf.getvalue())
+            
+            st.success("Complete!")
+            st.download_button(
+                label=f"Download {len(processed_images)} Images (ZIP)",
+                data=zip_buffer.getvalue(),
+                file_name="bulk_age_restricted_images.zip",
+                mime="application/zip",
+                use_container_width=True
+            )
