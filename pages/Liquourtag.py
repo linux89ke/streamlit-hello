@@ -530,10 +530,7 @@ def scrape_category(category_url, max_items=30):
 # ─── Header ───────────────────────────────────────────────────────────────────────
 st.title("18+ Tag Generator")
 st.markdown('<div class="orange-bar"></div>', unsafe_allow_html=True)
-st.markdown(
-    '<p class="subhead">Apply age-restriction overlays to product images — 800 x 800 px, ready to upload.</p>',
-    unsafe_allow_html=True
-)
+
 
 if TAG_MISSING:
     st.error(f"Overlay file not found: {TAG_FILE} — place it in the same directory as this script.")
