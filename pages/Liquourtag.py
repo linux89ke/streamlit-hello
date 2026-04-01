@@ -144,15 +144,47 @@ def crop_white_space(img):
 
 
 def compose_image(product_img, tag_img, apply_remove=True):
-    """Compose a single product image with the tag overlay."""
+    """Compose a single product image with the tag overlay.
+
+    The product is scaled so its height exactly fills the canvas minus
+    VERTICAL_PADDING px on the top and bottom (i.e. available height =
+    TARGET_CANVAS_SIZE[1] - 2 * VERTICAL_PADDING).  The width is scaled
+    proportionally; if the result would be wider than the canvas minus the
+    same horizontal padding, it is scaled down again to fit width-wise.
+    The image is then centred horizontally and pinned to the 50 px top margin.
+    """
+    VERTICAL_PADDING = 50
+
     img = product_img.copy()
     if apply_remove:
         img = remove_existing_tag(img)
     img = crop_white_space(img)
-    img.thumbnail(PRODUCT_MAX_SIZE, Image.Resampling.LANCZOS)
+
+    canvas_w, canvas_h = TARGET_CANVAS_SIZE
+    available_h = canvas_h - 2 * VERTICAL_PADDING   # 700 px for 800-px canvas
+    available_w = canvas_w - 2 * VERTICAL_PADDING   # 700 px for 800-px canvas
+
+    src_w, src_h = img.size
+
+    # Scale to fill available height exactly, preserving aspect ratio
+    scale = available_h / src_h
+    new_w = int(src_w * scale)
+    new_h = available_h
+
+    # If width exceeds available width, scale down to fit width instead
+    if new_w > available_w:
+        scale = available_w / src_w
+        new_w = available_w
+        new_h = int(src_h * scale)
+
+    img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
     result = Image.new("RGB", TARGET_CANVAS_SIZE, (255, 255, 255))
-    px = (TARGET_CANVAS_SIZE[0] - img.width) // 2
-    py = (TARGET_CANVAS_SIZE[1] - img.height) // 2
+
+    # Centre horizontally; top-align to VERTICAL_PADDING
+    px = (canvas_w - new_w) // 2
+    py = VERTICAL_PADDING
+
     if img.mode == 'RGBA':
         result.paste(img, (px, py), img)
     else:
