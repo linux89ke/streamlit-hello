@@ -13,28 +13,182 @@ import time
 from bs4 import BeautifulSoup
 
 # ─── Page Config ─────────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Age Restriction Tag Generator", page_icon=None, layout="wide")
+st.set_page_config(page_title="18+ Tag Generator", page_icon=None, layout="wide")
 
+# Jumia brand palette
+# Primary orange: #F68B1E  |  Dark: #1A1A1A  |  Light bg: #FFF8F2  |  Border: #F0D5B8
 st.markdown("""
 <style>
-    [data-testid="stAppViewContainer"] { background: #f5f5f3; }
-    [data-testid="stSidebar"] { background: #fff; border-right: 1px solid #e0e0e0; }
-    h1 { font-size: 1.45rem !important; font-weight: 700 !important; color: #111 !important;
-         letter-spacing: -0.02em; margin-bottom: 0 !important; }
-    .subhead { color: #666; font-size: 0.85rem; margin-top: 2px; margin-bottom: 1.2rem; }
-    h3 { font-weight: 600 !important; color: #111 !important; font-size: 1rem !important; }
-    .stTabs [data-baseweb="tab-list"] { gap: 4px; border-bottom: 2px solid #e0e0e0; }
-    .stTabs [data-baseweb="tab"] { font-weight: 500; font-size: 0.875rem; padding: 8px 18px; color: #555; }
-    .stTabs [aria-selected="true"] { color: #111 !important; border-bottom: 2px solid #111 !important; }
-    .stButton > button { border-radius: 4px !important; font-weight: 600 !important; }
-    .stButton > button[kind="primary"] {
-        background: #111 !important; color: #fff !important;
-        border: none !important; letter-spacing: 0.01em;
+    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
+
+    * { font-family: 'DM Sans', sans-serif; }
+
+    [data-testid="stAppViewContainer"] {
+        background: #FFF8F2;
     }
-    .stButton > button[kind="primary"]:hover { background: #333 !important; }
-    .stDownloadButton > button { border-radius: 4px !important; font-weight: 600 !important; }
-    div[data-testid="stImage"] img { border: 1px solid #e0e0e0; border-radius: 4px; }
-    .stAlert { border-radius: 4px !important; }
+    [data-testid="stSidebar"] {
+        background: #1A1A1A !important;
+        border-right: none;
+    }
+    [data-testid="stSidebar"] * { color: #fff !important; }
+    [data-testid="stSidebar"] .stRadio label,
+    [data-testid="stSidebar"] .stCheckbox label { color: #ccc !important; }
+    [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p { color: #aaa !important; }
+    [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2,
+    [data-testid="stSidebar"] h3 { color: #F68B1E !important; }
+
+    /* Sidebar radio + checkbox accent */
+    [data-testid="stSidebar"] [data-baseweb="radio"] [data-testid="stMarkdownContainer"] p { color: #fff !important; }
+    [data-testid="stSidebar"] input[type="radio"]:checked + div { border-color: #F68B1E !important; }
+    [data-testid="stSidebar"] [data-baseweb="checkbox"] svg { fill: #F68B1E !important; }
+
+    /* Header */
+    h1 {
+        font-size: 1.5rem !important;
+        font-weight: 700 !important;
+        color: #1A1A1A !important;
+        letter-spacing: -0.02em;
+        margin-bottom: 0 !important;
+    }
+    .subhead {
+        color: #888;
+        font-size: 0.85rem;
+        margin-top: 3px;
+        margin-bottom: 1.4rem;
+    }
+    .orange-bar {
+        height: 3px;
+        background: linear-gradient(90deg, #F68B1E, #ffb347);
+        border-radius: 2px;
+        margin-bottom: 1.2rem;
+    }
+
+    /* Tabs */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 0;
+        border-bottom: 2px solid #F0D5B8;
+        background: transparent;
+    }
+    .stTabs [data-baseweb="tab"] {
+        font-weight: 500;
+        font-size: 0.875rem;
+        padding: 10px 20px;
+        color: #888;
+        border-radius: 0;
+        background: transparent;
+    }
+    .stTabs [aria-selected="true"] {
+        color: #F68B1E !important;
+        border-bottom: 2px solid #F68B1E !important;
+        font-weight: 700 !important;
+        background: transparent !important;
+    }
+    .stTabs [data-baseweb="tab"]:hover { color: #F68B1E !important; }
+
+    /* Primary buttons — orange */
+    .stButton > button[kind="primary"] {
+        background: #F68B1E !important;
+        color: #fff !important;
+        border: none !important;
+        border-radius: 6px !important;
+        font-weight: 700 !important;
+        letter-spacing: 0.01em;
+        padding: 0.55rem 1.2rem;
+        transition: background 0.15s;
+    }
+    .stButton > button[kind="primary"]:hover { background: #d97710 !important; }
+
+    /* Secondary buttons */
+    .stButton > button {
+        border-radius: 6px !important;
+        font-weight: 600 !important;
+        border: 1.5px solid #F68B1E !important;
+        color: #F68B1E !important;
+        background: transparent !important;
+    }
+    .stButton > button:hover { background: #FFF0E0 !important; }
+
+    /* Download buttons */
+    .stDownloadButton > button {
+        border-radius: 6px !important;
+        font-weight: 700 !important;
+        background: #F68B1E !important;
+        color: #fff !important;
+        border: none !important;
+    }
+    .stDownloadButton > button:hover { background: #d97710 !important; }
+
+    /* Secondary download (originals) */
+    .orig-dl .stDownloadButton > button {
+        background: transparent !important;
+        color: #F68B1E !important;
+        border: 1.5px solid #F68B1E !important;
+    }
+    .orig-dl .stDownloadButton > button:hover { background: #FFF0E0 !important; }
+
+    /* Progress bar */
+    [data-testid="stProgressBar"] > div > div { background: #F68B1E !important; }
+
+    /* Images */
+    div[data-testid="stImage"] img {
+        border: 1.5px solid #F0D5B8;
+        border-radius: 6px;
+    }
+
+    /* Alerts */
+    .stAlert { border-radius: 6px !important; }
+    [data-testid="stAlert"][data-baseweb="notification"] {
+        border-left: 4px solid #F68B1E !important;
+    }
+
+    /* File uploader */
+    [data-testid="stFileUploader"] section {
+        border: 2px dashed #F0D5B8 !important;
+        border-radius: 8px !important;
+        background: #FFFAF5 !important;
+    }
+    [data-testid="stFileUploader"] section:hover {
+        border-color: #F68B1E !important;
+        background: #FFF5EA !important;
+    }
+
+    /* Text inputs */
+    [data-testid="stTextInput"] input, [data-testid="stTextArea"] textarea {
+        border: 1.5px solid #F0D5B8 !important;
+        border-radius: 6px !important;
+        background: #FFFAF5 !important;
+    }
+    [data-testid="stTextInput"] input:focus, [data-testid="stTextArea"] textarea:focus {
+        border-color: #F68B1E !important;
+        box-shadow: 0 0 0 2px rgba(246,139,30,0.15) !important;
+    }
+
+    /* Caption text */
+    .stCaption { color: #888 !important; font-size: 0.78rem !important; }
+
+    /* Spinner */
+    [data-testid="stSpinner"] { color: #F68B1E !important; }
+
+    div[data-testid="stMarkdownContainer"] h3 {
+        font-weight: 700 !important;
+        color: #1A1A1A !important;
+        font-size: 0.95rem !important;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+
+    /* Empty preview placeholder */
+    .preview-empty {
+        height: 240px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 2px dashed #F0D5B8;
+        border-radius: 8px;
+        color: #bbb;
+        font-size: 0.875rem;
+        background: #FFFAF5;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -44,10 +198,7 @@ TARGET_CANVAS_SIZE = (800, 800)
 VERTICAL_PADDING = 50
 
 # ─── Session State ────────────────────────────────────────────────────────────────
-for key, default in [
-    ("single_result", None),
-    ("single_name", "tagged_image.jpg"),
-]:
+for key, default in [("single_result", None), ("single_name", "tagged_image.jpg")]:
     if key not in st.session_state:
         st.session_state[key] = default
 
@@ -56,12 +207,24 @@ TAG_PATH = TAG_FILE if os.path.exists(TAG_FILE) else os.path.join(os.path.dirnam
 TAG_MISSING = not os.path.exists(TAG_PATH)
 
 # ─── Sidebar ──────────────────────────────────────────────────────────────────────
-st.sidebar.title("Settings")
+st.sidebar.markdown("## Settings")
+st.sidebar.markdown("---")
 remove_old_tags = st.sidebar.checkbox(
     "Remove existing 18+ tags", value=True,
-    help="Detects and removes any previous red 18+ overlay before applying the new one.")
-jumia_site = st.sidebar.radio("Jumia site", ["Jumia Kenya", "Jumia Uganda"])
-JUMIA_BASE = "https://www.jumia.co.ke" if jumia_site == "Jumia Kenya" else "https://www.jumia.ug"
+    help="Scans the top-right corner for a previous red tag and removes it before applying the new one."
+)
+st.sidebar.markdown("---")
+st.sidebar.markdown("**Marketplace region**")
+marketplace = st.sidebar.radio(
+    "Region", ["Kenya", "Uganda"], label_visibility="collapsed"
+)
+MARKET_BASE = "https://www.jumia.co.ke" if marketplace == "Kenya" else "https://www.jumia.ug"
+
+st.sidebar.markdown("---")
+st.sidebar.markdown(
+    '<p style="font-size:0.75rem;color:#666;margin-top:8px;">18+ Tag Generator v3.0</p>',
+    unsafe_allow_html=True
+)
 
 # ─── Core Image Functions ─────────────────────────────────────────────────────────
 
@@ -145,15 +308,11 @@ def compose_image(product_img, tag_img, apply_remove=True):
 
 def img_to_bytes(img, fmt="JPEG"):
     buf = BytesIO()
-    if fmt == "JPEG":
-        img.save(buf, format="JPEG", quality=95)
-    else:
-        img.save(buf, format=fmt)
+    img.save(buf, format=fmt, quality=95) if fmt == "JPEG" else img.save(buf, format=fmt)
     return buf.getvalue()
 
 
 def build_zip(pairs, fmt="JPEG"):
-    """Build a ZIP from (PIL Image, filename) pairs."""
     ext = "jpg" if fmt == "JPEG" else fmt.lower()
     buf = BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -163,10 +322,6 @@ def build_zip(pairs, fmt="JPEG"):
 
 
 def process_bulk(products, tag):
-    """
-    products: list of (PIL Image, str name, bool is_device_upload)
-    Returns list of (tagged PIL Image, final_name), preserving input order.
-    """
     results = []
     for img, name, is_device in products:
         result = compose_image(img, tag, apply_remove=remove_old_tags)
@@ -176,11 +331,6 @@ def process_bulk(products, tag):
 
 
 def show_grid_and_download(results, originals=None, zip_name="tagged_images.zip"):
-    """
-    Show image grid and download buttons.
-    results:   list of (tagged PIL Image, name)
-    originals: list of (original PIL Image, name) — if provided, show backup download
-    """
     cols_per_row = 4
     for i in range(0, len(results), cols_per_row):
         row_imgs = results[i:i + cols_per_row]
@@ -188,26 +338,29 @@ def show_grid_and_download(results, originals=None, zip_name="tagged_images.zip"
         for col, (img, name) in zip(cols, row_imgs):
             col.image(img, caption=name, use_container_width=True)
 
+    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
     dl_col, orig_col = st.columns(2)
     with dl_col:
         st.download_button(
-            f"Download {len(results)} Tagged Image(s) (ZIP)",
+            f"Download {len(results)} Tagged Image(s)",
             build_zip(results),
             zip_name, "application/zip",
             use_container_width=True, type="primary"
         )
     if originals:
         with orig_col:
+            st.markdown('<div class="orig-dl">', unsafe_allow_html=True)
             st.download_button(
-                f"Download {len(originals)} Original(s) (ZIP)",
+                f"Download {len(originals)} Original(s)",
                 build_zip(originals),
                 zip_name.replace(".zip", "_originals.zip"),
                 "application/zip",
                 use_container_width=True
             )
+            st.markdown('</div>', unsafe_allow_html=True)
 
 
-# ─── Selenium Helpers ─────────────────────────────────────────────────────────────
+# ─── Selenium / Scraping Helpers ──────────────────────────────────────────────────
 
 @st.cache_resource
 def get_driver_path():
@@ -255,7 +408,7 @@ def get_driver():
         svc = Service(dp, log_path=os.devnull) if dp else None
         driver = webdriver.Chrome(service=svc, options=opts) if svc else webdriver.Chrome(options=opts)
     except Exception as e:
-        st.warning(f"ChromeDriver unavailable: {e}")
+        st.warning(f"Browser driver unavailable: {e}")
         return None
     try:
         driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
@@ -266,26 +419,7 @@ def get_driver():
     return driver
 
 
-def search_jumia_by_sku(sku):
-    """
-    Search Jumia for a specific SKU and return its main product image.
-
-    Root cause of ghost products:
-      - The old fallback `a[href*='.html']` matched ANY link on the page
-        (nav menus, banners, related products), causing random product images
-        to be fetched for SKUs that returned no direct match.
-      - The old code also took links[0] blindly without checking whether the
-        search result actually corresponded to the queried SKU.
-
-    Fix:
-      - Only use `article.prd a.core` links from the search results grid.
-        These are guaranteed to be product cards, not navigation.
-      - The broad `.html` fallback is completely removed.
-      - If the search result page yields zero product cards, we return None
-        immediately rather than falling through to an unrelated page.
-      - We verify the SKU appears in the product page URL or title before
-        fetching the image, and skip if there is no match.
-    """
+def search_by_sku(sku):
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
@@ -294,35 +428,27 @@ def search_jumia_by_sku(sku):
     driver = get_driver()
     if not driver:
         return None
-
     try:
-        driver.get(f"{JUMIA_BASE}/catalog/?q={sku}")
+        driver.get(f"{MARKET_BASE}/catalog/?q={sku}")
         try:
             WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, "article.prd"))
             )
         except TimeoutException:
-            # No product grid appeared at all — genuine no-result
             return None
 
-        # Only consider actual product card links — never nav/category links
         product_links = driver.find_elements(By.CSS_SELECTOR, "article.prd a.core")
         if not product_links:
             return None
 
-        # Verify the first result relates to our SKU.
-        # Jumia encodes the SKU in the product URL (e.g. /…-SKUXXXX.html)
-        # and also exposes it as data-sku on the article element.
         sku_lower = sku.lower()
         target_url = None
 
-        for link in product_links[:5]:   # check up to 5 results, not just first
+        for link in product_links[:5]:
             href = link.get_attribute("href") or ""
-            # Try to find the SKU in the URL slug
             if sku_lower in href.lower():
                 target_url = href
                 break
-            # Also check data-sku attribute on the parent article
             try:
                 article = link.find_element(By.XPATH, "./ancestor::article")
                 data_sku = (article.get_attribute("data-sku") or "").lower()
@@ -332,8 +458,6 @@ def search_jumia_by_sku(sku):
             except Exception:
                 pass
 
-        # If none of the top results match the SKU, return None rather than
-        # fetching an unrelated product image
         if not target_url:
             return None
 
@@ -348,13 +472,9 @@ def search_jumia_by_sku(sku):
 
         soup = BeautifulSoup(driver.page_source, 'html.parser')
         image_url = None
-
-        # Prefer og:image as it is always the primary product shot
         og = soup.find('meta', property='og:image')
         if og and og.get('content'):
             image_url = og['content']
-
-        # Fallback: scan img tags for Jumia CDN product images only
         if not image_url:
             for img_tag in soup.find_all('img', limit=20):
                 src = img_tag.get('data-src') or img_tag.get('src', '')
@@ -362,24 +482,22 @@ def search_jumia_by_sku(sku):
                     if src.startswith('//'):
                         src = 'https:' + src
                     elif src.startswith('/'):
-                        src = JUMIA_BASE + src
+                        src = MARKET_BASE + src
                     image_url = src
                     break
-
         if not image_url:
             return None
 
         r = requests.get(image_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
         r.raise_for_status()
         return Image.open(BytesIO(r.content)).convert("RGBA")
-
     except Exception:
         return None
     finally:
         driver.quit()
 
 
-def scrape_jumia_category(category_url, max_items=30):
+def scrape_category(category_url, max_items=30):
     driver = get_driver()
     if not driver:
         return []
@@ -410,9 +528,10 @@ def scrape_jumia_category(category_url, max_items=30):
 
 
 # ─── Header ───────────────────────────────────────────────────────────────────────
-st.title("Age Restriction Tag Generator")
+st.title("18+ Tag Generator")
+st.markdown('<div class="orange-bar"></div>', unsafe_allow_html=True)
 st.markdown(
-    '<p class="subhead">Apply 18+ overlays to product images for marketplace listings.</p>',
+    '<p class="subhead">Apply age-restriction overlays to product images — 800 x 800 px, ready to upload.</p>',
     unsafe_allow_html=True
 )
 
@@ -424,7 +543,7 @@ tag_img_cached = load_tag_image()
 
 # ─── Tabs ─────────────────────────────────────────────────────────────────────────
 tab_single, tab_files, tab_excel, tab_urls, tab_skus, tab_category = st.tabs([
-    "Single Image", "Multiple Images", "Excel", "URLs", "SKUs", "Jumia Category"
+    "Single Image", "Multiple Images", "Excel", "URLs", "SKUs", "Category Scrape"
 ])
 
 # ══════════════════════════════════════════════════════════════════════════════════
@@ -462,15 +581,11 @@ with tab_single:
             st.image(result, use_container_width=True)
             st.download_button(
                 "Download", img_to_bytes(result), out_name,
-                "image/jpeg", use_container_width=True
+                "image/jpeg", use_container_width=True, type="primary"
             )
         else:
-            st.markdown(
-                '<div style="height:220px;display:flex;align-items:center;'
-                'justify-content:center;border:1px dashed #ccc;border-radius:6px;'
-                'color:#aaa;font-size:0.875rem;">Preview will appear here</div>',
-                unsafe_allow_html=True
-            )
+            st.markdown('<div class="preview-empty">Preview will appear here</div>',
+                        unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════════════════
 # TAB 2 — MULTIPLE IMAGE FILES
@@ -481,8 +596,8 @@ with tab_files:
         accept_multiple_files=True, label_visibility="collapsed"
     )
     if files:
-        products = [(Image.open(f).convert("RGBA"), f.name.rsplit('.', 1)[0], True) for f in files]
-        originals = [(Image.open(f).convert("RGB"), f.name.rsplit('.', 1)[0]) for f in files]
+        products  = [(Image.open(f).convert("RGBA"), f.name.rsplit('.', 1)[0], True) for f in files]
+        originals = [(Image.open(f).convert("RGB"),  f.name.rsplit('.', 1)[0])       for f in files]
         with st.spinner(f"Processing {len(products)} image(s)..."):
             results = process_bulk(products, tag_img_cached)
         st.success(f"{len(results)} image(s) ready.")
@@ -492,7 +607,7 @@ with tab_files:
 # TAB 3 — EXCEL
 # ══════════════════════════════════════════════════════════════════════════════════
 with tab_excel:
-    st.caption("Accepts columns: URL / Link / Image, SKU, Name / Title. Images are fetched automatically.")
+    st.caption("Accepts columns named URL / Link / Image, SKU, and Name / Title. Images are fetched automatically.")
     xl = st.file_uploader("Select Excel file", type=["xlsx", "xls"], label_visibility="collapsed")
 
     if xl:
@@ -531,7 +646,7 @@ with tab_excel:
                 except Exception:
                     pass
             elif sku_col and pd.notna(row.get(sku_col)):
-                img = search_jumia_by_sku(str(row[sku_col]).strip())
+                img = search_by_sku(str(row[sku_col]).strip())
             return base, img
 
         fetched = []
@@ -545,7 +660,7 @@ with tab_excel:
 
         if fetched:
             originals = [(img.convert("RGB"), name) for img, name in fetched]
-            products = [(img, name, False) for img, name in fetched]
+            products  = [(img, name, False)          for img, name in fetched]
             with st.spinner("Applying tags..."):
                 results = process_bulk(products, tag_img_cached)
             st.success(f"{len(results)} image(s) processed.")
@@ -569,15 +684,14 @@ with tab_urls:
             try:
                 r = requests.get(url, timeout=10)
                 r.raise_for_status()
-                img = Image.open(BytesIO(r.content)).convert("RGBA")
-                fetched.append((img, f"image_{i + 1}"))
+                fetched.append((Image.open(BytesIO(r.content)).convert("RGBA"), f"image_{i + 1}"))
             except Exception:
                 errors += 1
             prog.progress((i + 1) / len(urls), text=f"Fetched {i + 1} of {len(urls)}...")
 
         if fetched:
             originals = [(img.convert("RGB"), name) for img, name in fetched]
-            products = [(img, name, False) for img, name in fetched]
+            products  = [(img, name, False)          for img, name in fetched]
             with st.spinner("Applying tags..."):
                 results = process_bulk(products, tag_img_cached)
             msg = f"{len(results)} image(s) processed."
@@ -591,16 +705,16 @@ with tab_urls:
 # ══════════════════════════════════════════════════════════════════════════════════
 with tab_skus:
     skus_text = st.text_area(
-        "Enter SKUs, one per line", height=150,
+        "Enter product SKUs, one per line", height=150,
         placeholder="SKU001\nSKU002"
     )
     if skus_text.strip() and st.button("Fetch and Tag", type="primary", use_container_width=True):
         skus = [s.strip() for s in skus_text.splitlines() if s.strip()]
-        prog = st.progress(0, text="Fetching from Jumia...")
-        fetched = []   # list of (img, sku_name) — only verified matches
+        prog = st.progress(0, text="Fetching product images...")
+        fetched = []
 
         def fetch_one_sku(sku):
-            return sku, search_jumia_by_sku(sku)
+            return sku, search_by_sku(sku)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
             futs = {ex.submit(fetch_one_sku, s): s for s in skus}
@@ -613,32 +727,35 @@ with tab_skus:
         not_found = len(skus) - len(fetched)
         if fetched:
             originals = [(img.convert("RGB"), name) for img, name in fetched]
-            products = [(img, name, False) for img, name in fetched]
+            products  = [(img, name, False)          for img, name in fetched]
             with st.spinner("Applying tags..."):
                 results = process_bulk(products, tag_img_cached)
             msg = f"{len(results)} of {len(skus)} SKU(s) processed."
             if not_found:
-                msg += f" {not_found} SKU(s) returned no verified match and were skipped."
+                msg += f" {not_found} SKU(s) had no verified match and were skipped."
             st.success(msg)
             show_grid_and_download(results, originals=originals)
         else:
             st.error("No verified images found for the provided SKUs.")
 
 # ══════════════════════════════════════════════════════════════════════════════════
-# TAB 6 — JUMIA CATEGORY
+# TAB 6 — CATEGORY SCRAPE
 # ══════════════════════════════════════════════════════════════════════════════════
 with tab_category:
-    cat_url = st.text_input("Category URL", placeholder="https://www.jumia.co.ke/beers/")
-    max_items = st.slider("Maximum items", 10, 100, 30, step=10)
+    cat_url = st.text_input(
+        "Category URL",
+        placeholder=f"{MARKET_BASE}/beers/"
+    )
+    max_items = st.slider("Maximum items to scrape", 10, 100, 30, step=10)
 
     if cat_url.strip() and st.button("Scrape and Tag", type="primary", use_container_width=True):
         with st.spinner("Scraping category page..."):
-            scraped = scrape_jumia_category(cat_url.strip(), max_items)
+            scraped = scrape_category(cat_url.strip(), max_items)
 
         if not scraped:
             st.error("No products found. Check the URL and try again.")
         else:
-            prog = st.progress(0, text="Downloading images...")
+            prog = st.progress(0, text="Downloading product images...")
 
             def fetch_cat_img(args):
                 name, url = args
@@ -661,7 +778,7 @@ with tab_category:
 
             if fetched:
                 originals = [(img.convert("RGB"), name) for img, name in fetched]
-                products = [(img, name, False) for img, name in fetched]
+                products  = [(img, name, False)          for img, name in fetched]
                 with st.spinner("Applying tags..."):
                     results = process_bulk(products, tag_img_cached)
                 st.success(f"{len(results)} image(s) processed.")
