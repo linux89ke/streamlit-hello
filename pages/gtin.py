@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 import time
 import os
 from collections import defaultdict
+import urllib.parse as urlparse
 
 # =========================
 # CONFIG
@@ -18,6 +19,26 @@ BRANDS = [
     "lg", "bosch", "philips", "tecno", "infinix"
 ]
 
+BAD_SITES = [
+    "sony.com",
+    "sony-asia.com",
+    "manual",
+    "support",
+]
+
+# =========================
+# HELPERS
+# =========================
+def clean_url(url):
+    if "duckduckgo.com" in url:
+        parsed = urlparse.urlparse(url)
+        qs = urlparse.parse_qs(parsed.query)
+        return qs.get("uddg", [url])[0]
+    return url
+
+def is_valid_url(url):
+    return not any(b in url.lower() for b in BAD_SITES)
+
 # =========================
 # BRAND + MODEL DETECTION
 # =========================
@@ -29,8 +50,15 @@ def detect_brand(text):
     return None
 
 def detect_model(text):
-    # captures patterns like DAV-DZ650, SM-A135F, etc.
-    matches = re.findall(r"\b[A-Z0-9\-]{5,}\b", text.upper())
+    text = text.upper()
+
+    # Specific Sony pattern fix
+    match = re.search(r"(DAV[-\s]?DZ[-\s]?\d{3})", text)
+    if match:
+        return match.group(1).replace(" ", "").replace("--", "-")
+
+    # General fallback
+    matches = re.findall(r"\b[A-Z0-9\-]{5,}\d+\b", text)
     return matches[0] if matches else None
 
 def enhance_query(name):
@@ -53,8 +81,11 @@ def extract_gtins(text):
         results.update(re.findall(p, text))
     return list(results)
 
+def extract_from_snippet(snippet):
+    return extract_gtins(snippet or "")
+
 # =========================
-# VALIDATION (EAN-13)
+# VALIDATION
 # =========================
 def validate_ean13(code):
     if len(code) != 13:
@@ -91,11 +122,17 @@ def fallback_search(query):
         soup = BeautifulSoup(res.text, "lxml")
 
         results = []
-        for a in soup.select(".result__a"):
-            results.append({
-                "title": a.get_text(),
-                "link": a.get("href")
-            })
+        for r in soup.select(".result"):
+            a = r.select_one(".result__a")
+            snippet = r.select_one(".result__snippet")
+
+            if a:
+                results.append({
+                    "title": a.get_text(),
+                    "link": a.get("href"),
+                    "snippet": snippet.get_text() if snippet else ""
+                })
+
         return results[:5]
     except:
         return []
@@ -123,9 +160,17 @@ def find_product_data(product_name):
         f'"{product_name}" EAN',
         f'"{product_name}" UPC',
         f'{product_name} barcode',
+        f'{product_name} EAN site:amazon.com',
+        f'{product_name} UPC site:ebay.com',
+        f'{product_name} barcode site:jumia.com',
+        f'{product_name} barcode site:jiji.co.ke',
         f'{product_name} specifications',
-        f'{product_name} tech specs',
     ]
+
+    # Prioritize model search
+    if model:
+        queries.insert(0, f'"{model}" EAN')
+        queries.insert(1, f'{model} UPC')
 
     gtin_scores = defaultdict(int)
     sources = defaultdict(list)
@@ -137,12 +182,20 @@ def find_product_data(product_name):
         if not results:
             results = fallback_search(q)
 
-        for r in results[:5]:
-            url = r.get("link")
-            if not url:
+        for r in results:
+            raw_url = r.get("link")
+            url = clean_url(raw_url)
+
+            if not url or not is_valid_url(url):
                 continue
 
             st.write(f"➡️ {url}")
+
+            # Extract from snippet first (fast win)
+            snippet_gtins = extract_from_snippet(r.get("snippet", ""))
+            for g in snippet_gtins:
+                gtin_scores[g] += 2
+                sources[g].append(url)
 
             html = fetch_page(url)
             if not html:
@@ -170,11 +223,12 @@ def find_product_data(product_name):
             "model": model,
             "gtin": None,
             "confidence": 0,
+            "status": "not_found",
+            "reason": "GTIN not publicly indexed",
             "sources": []
         }
 
     best_gtin = max(gtin_scores, key=gtin_scores.get)
-
     confidence = min(1.0, gtin_scores[best_gtin] / 10)
 
     return {
@@ -182,6 +236,7 @@ def find_product_data(product_name):
         "model": model,
         "gtin": best_gtin,
         "confidence": round(confidence, 2),
+        "status": "found",
         "sources": sources[best_gtin]
     }
 
@@ -203,7 +258,6 @@ if st.button("Find Product Data"):
             result = find_product_data(product)
 
         st.subheader("📦 Result")
-
         st.json(result)
 
         if result["gtin"]:
