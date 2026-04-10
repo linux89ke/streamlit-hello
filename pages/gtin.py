@@ -246,8 +246,8 @@ def find_product_data_fast(product_name):
 # =========================
 st.set_page_config(page_title="GTIN Finder PRO", layout="wide")
 
-st.title("GTIN Finder PRO (Bulk & Amazon Edition)")
-st.caption("UPC API + Amazon Scraper + Snippet Scrape + Smart Cache")
+st.title("GTIN Finder")
+
 
 st.write("### Enter Products")
 product_input = st.text_area("Input product names here (one per line):", height=150, placeholder="Sony WH-1000XM4\nNike Air Max 90\nSamsung Galaxy S23")
