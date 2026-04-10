@@ -174,7 +174,8 @@ def find_product_data_fast(product_name):
     gtin_scores = defaultdict(int)
     sources = defaultdict(list)
 
-    # 🚀 STEP 1: UPCItemDB API
+    # STEP 1: UPCItemDB API
+    st.write("Querying UPCItemDB Database API...")
     upc_results = upcitemdb_search(model if model else product_name)
     if upc_results:
         for gtin, title in upc_results:
@@ -184,7 +185,7 @@ def find_product_data_fast(product_name):
         best_gtin = max(gtin_scores, key=gtin_scores.get)
         return {"input_product": original_name, "brand": brand, "model": model, "gtin": best_gtin, "confidence": 0.99, "status": "found_api", "sources": ", ".join(set(sources[best_gtin]))}
 
-    # 🛒 STEP 1.5: Amazon Direct Scrape
+    # STEP 1.5: Amazon Direct Scrape
     amazon_gtins = scrape_amazon_direct(f"{product_name} UPC EAN")
     if amazon_gtins:
         for g in amazon_gtins:
@@ -196,11 +197,12 @@ def find_product_data_fast(product_name):
         best_gtin = max(gtin_scores, key=gtin_scores.get)
         return {"input_product": original_name, "brand": brand, "model": model, "gtin": best_gtin, "confidence": 0.85, "status": "found_amazon", "sources": ", ".join(set(sources[best_gtin]))}
 
-    # ⚡ STEP 2: SEARCH ENGINE SNIPPETS
+    # STEP 2: SEARCH ENGINE SNIPPETS
     queries = [f'{product_name} EAN site:amazon.com', f'{product_name} UPC', f'{product_name} barcode']
     if model: queries.insert(0, f'{model} EAN')
 
     for q in queries:
+        st.write(f"Searching query snippets: {q}")
         results = serpapi_search(q)
         if not results: results = fallback_search(q)
 
@@ -219,7 +221,8 @@ def find_product_data_fast(product_name):
         confidence = min(1.0, gtin_scores[best_gtin] / 10)
         return {"input_product": original_name, "brand": brand, "model": model, "gtin": best_gtin, "confidence": round(confidence, 2), "status": "found_snippet", "sources": ", ".join(set(sources[best_gtin]))}
 
-    # 🐢 STEP 3: DEEP PAGE SCRAPING
+    # STEP 3: DEEP PAGE SCRAPING
+    st.write("No GTIN found in snippets. Initiating deep page scraping...")
     for q in queries[:2]:
         results = fallback_search(q)
         for r in results[:3]: 
@@ -243,11 +246,11 @@ def find_product_data_fast(product_name):
 # =========================
 st.set_page_config(page_title="GTIN Finder PRO", layout="wide")
 
-st.title("📦 GTIN Finder PRO (Bulk & Amazon Edition)")
+st.title("GTIN Finder PRO (Bulk & Amazon Edition)")
 st.caption("UPC API + Amazon Scraper + Snippet Scrape + Smart Cache")
 
 st.write("### Enter Products")
-product_input = st.text_area("Paste product names here (one per line):", height=150, placeholder="Sony WH-1000XM4\nNike Air Max 90\nSamsung Galaxy S23")
+product_input = st.text_area("Input product names here (one per line):", height=150, placeholder="Sony WH-1000XM4\nNike Air Max 90\nSamsung Galaxy S23")
 
 if st.button("Run Bulk Analysis"):
     # Clean input list
@@ -272,7 +275,7 @@ if st.button("Run Bulk Analysis"):
             # Update progress
             progress_bar.progress((i + 1) / len(products))
         
-        status_text.success("Bulk processing complete!")
+        status_text.success("Bulk processing complete.")
         
         # Display Results as DataFrame
         df = pd.DataFrame(results_data)
@@ -282,7 +285,7 @@ if st.button("Run Bulk Analysis"):
         # CSV Export
         csv = df.to_csv(index=False).encode('utf-8')
         st.download_button(
-            label="⬇️ Download Results as CSV",
+            label="Download Results as CSV",
             data=csv,
             file_name='gtin_bulk_results.csv',
             mime='text/csv',
