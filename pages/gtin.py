@@ -67,7 +67,7 @@ def enhance_query(name):
     return name
 
 # =========================
-# GTIN EXTRACTION
+# GTIN EXTRACTION & VALIDATION
 # =========================
 def extract_gtins(text):
     patterns = [
@@ -80,12 +80,6 @@ def extract_gtins(text):
         results.update(re.findall(p, text))
     return list(results)
 
-def extract_from_snippet(snippet):
-    return extract_gtins(snippet or "")
-
-# =========================
-# VALIDATION
-# =========================
 def validate_ean13(code):
     if len(code) != 13:
         return False
@@ -94,9 +88,31 @@ def validate_ean13(code):
     return (10 - (checksum % 10)) % 10 == digits[-1]
 
 # =========================
-# SEARCH (SERPAPI)
+# SEARCH APIs
 # =========================
+def upcitemdb_search(query):
+    """Tier 1: Fastest method using free UPCItemDB API"""
+    url = "https://api.upcitemdb.com/prod/trial/search"
+    params = {"s": query, "match_mode": "0", "type": "product"}
+    
+    try:
+        res = requests.get(url, params=params, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            if data.get("code") == "OK" and data.get("items"):
+                results = []
+                # Grab EAN or UPC from the top matches
+                for item in data["items"]:
+                    gtin = item.get("ean") or item.get("upc")
+                    if gtin:
+                        results.append((gtin, item.get("title", "Unknown Title")))
+                return results
+    except Exception:
+        pass
+    return []
+
 def serpapi_search(query):
+    """Tier 2: Fast snippet search via Google (Requires API Key)"""
     api_key = os.getenv("SERPAPI_KEY")
     if not api_key:
         return []
@@ -111,10 +127,8 @@ def serpapi_search(query):
     except:
         return []
 
-# =========================
-# FALLBACK SEARCH
-# =========================
 def fallback_search(query):
+    """Tier 3: Free DuckDuckGo Scraping"""
     url = f"https://duckduckgo.com/html/?q={query}"
     try:
         res = requests.get(url, headers=HEADERS)
@@ -136,9 +150,6 @@ def fallback_search(query):
     except:
         return []
 
-# =========================
-# FETCH PAGE
-# =========================
 def fetch_page(url):
     try:
         res = requests.get(url, headers=HEADERS, timeout=10)
@@ -147,7 +158,7 @@ def fetch_page(url):
         return ""
 
 # =========================
-# MAIN ENGINE (FAST HYBRID)
+# MAIN ENGINE (HYBRID API + SCRAPE)
 # =========================
 @st.cache_data(ttl=3600)
 def find_product_data_fast(product_name):
@@ -155,7 +166,30 @@ def find_product_data_fast(product_name):
 
     brand = detect_brand(product_name)
     model = detect_model(product_name)
+    
+    gtin_scores = defaultdict(int)
+    sources = defaultdict(list)
 
+    # 🚀 STEP 1: UPCItemDB API (INSTANT WIN)
+    st.write("⚡ Checking UPCItemDB Database API...")
+    upc_results = upcitemdb_search(model if model else product_name)
+    
+    if upc_results:
+        for gtin, title in upc_results:
+            gtin_scores[gtin] += 10  # Massive score boost for dedicated API
+            sources[gtin].append(f"UPCItemDB API (Matched: {title})")
+        
+        best_gtin = max(gtin_scores, key=gtin_scores.get)
+        return {
+            "brand": brand,
+            "model": model,
+            "gtin": best_gtin,
+            "confidence": 0.99,
+            "status": "found_instant_api",
+            "sources": sources[best_gtin]
+        }
+
+    # ⚡ STEP 2: SEARCH ENGINE SNIPPETS
     queries = [
         f'{product_name} EAN',
         f'{product_name} UPC',
@@ -165,12 +199,8 @@ def find_product_data_fast(product_name):
     if model:
         queries.insert(0, f'{model} EAN')
 
-    gtin_scores = defaultdict(int)
-    sources = defaultdict(list)
-
-    # STEP 1: SNIPPET ONLY (FAST)
     for q in queries:
-        st.write(f"⚡ Fast search: {q}")
+        st.write(f"🔍 Searching snippets: {q}")
 
         results = serpapi_search(q)
         if not results:
@@ -179,19 +209,16 @@ def find_product_data_fast(product_name):
         for r in results:
             url = clean_url(r.get("link"))
             snippet = r.get("snippet", "")
-
             gtins = extract_gtins(snippet)
 
             for g in gtins:
-                score = 3  # higher because fast match
-
+                score = 3
                 if validate_ean13(g):
                     score += 2
 
                 gtin_scores[g] += score
                 sources[g].append(url)
 
-    # ✅ If found → RETURN FAST
     if gtin_scores:
         best_gtin = max(gtin_scores, key=gtin_scores.get)
         confidence = min(1.0, gtin_scores[best_gtin] / 10)
@@ -201,19 +228,18 @@ def find_product_data_fast(product_name):
             "model": model,
             "gtin": best_gtin,
             "confidence": round(confidence, 2),
-            "status": "found_fast",
+            "status": "found_snippet",
             "sources": sources[best_gtin]
         }
 
-    # 🐢 STEP 2: FALLBACK (ONLY IF NEEDED)
-    st.write("🐢 No GTIN in snippets, deep searching...")
+    # 🐢 STEP 3: DEEP PAGE SCRAPING (FALLBACK)
+    st.write("🐢 No GTIN in snippets, deep scraping pages...")
 
-    for q in queries[:2]:  # limit deep search
+    for q in queries[:2]:
         results = fallback_search(q)
 
-        for r in results[:3]: # limit scraped results to 3
+        for r in results[:3]: 
             url = clean_url(r.get("link"))
-
             if not is_valid_url(url):
                 continue
 
@@ -222,7 +248,6 @@ def find_product_data_fast(product_name):
                 continue
 
             gtins = extract_gtins(html)
-
             for g in gtins:
                 gtin_scores[g] += 1
                 sources[g].append(url)
@@ -234,7 +259,7 @@ def find_product_data_fast(product_name):
             "gtin": None,
             "confidence": 0,
             "status": "not_found",
-            "reason": "GTIN not found (fast mode)",
+            "reason": "GTIN not found anywhere",
             "sources": []
         }
 
@@ -245,7 +270,7 @@ def find_product_data_fast(product_name):
         "model": model,
         "gtin": best_gtin,
         "confidence": 0.5,
-        "status": "found_slow",
+        "status": "found_deep_scrape",
         "sources": sources[best_gtin]
     }
 
@@ -254,17 +279,16 @@ def find_product_data_fast(product_name):
 # =========================
 st.set_page_config(page_title="GTIN Finder PRO", layout="wide")
 
-st.title("🔍 GTIN Finder PRO (Fast Mode)")
-st.caption("Search scraping + smart detection + scoring + caching")
+st.title("🔍 GTIN Finder PRO (Lightning Mode)")
+st.caption("UPC API + Snippet Scrape + Smart Cache")
 
-product = st.text_input("Enter product name")
+product = st.text_input("Enter product name (e.g., 'Sony WH-1000XM4' or 'Nike Air Max')")
 
 if st.button("Find Product Data"):
     if not product:
         st.warning("Enter a product name")
     else:
-        with st.spinner("Analyzing product across web..."):
-            # Swapped to the fast function here
+        with st.spinner("Analyzing product across web APIs..."):
             result = find_product_data_fast(product)
 
         st.subheader("📦 Result")
@@ -277,6 +301,5 @@ if st.button("Find Product Data"):
 
         if result["sources"]:
             st.subheader("🔗 Sources")
-            # Using set to remove duplicate source links for cleaner UI display
             for s in set(result["sources"]):
                 st.write(s)
