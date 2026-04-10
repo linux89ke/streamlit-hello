@@ -48,3 +48,4 @@ langdetect
 
 python-dotenv
 google-search-results
+lxml
