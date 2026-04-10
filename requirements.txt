@@ -43,3 +43,8 @@ protobuf==3.20.3
 opencv-python-headless
 streamlit-cropper
 langdetect
+
+
+
+python-dotenv
+google-search-results
