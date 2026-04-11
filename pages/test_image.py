@@ -1,59 +1,43 @@
 import streamlit as st
 import pandas as pd
-import re
-from collections import defaultdict, Counter
 
 # -----------------------------
-# CONFIG
+# CATEGORY INTELLIGENCE (NO PRODUCT DATA)
 # -----------------------------
-MIN_FREQUENCY = 2
-STOPWORDS = set([
-    "men", "women", "shoe", "shoes", "new", "fashion", "leather",
-    "black", "brown", "size", "with", "for", "and", "the"
-])
-
-# -----------------------------
-# TEXT CLEANING
-# -----------------------------
-def clean_text(text):
-    text = str(text).lower()
-    text = re.sub(r"[^a-z0-9\s-]", " ", text)
-    return text
+CATEGORY_LIBRARY = {
+    "formal shoes": ["oxford", "derby", "brogue", "wingtip", "monk strap", "loafer", "wholecut", "cap toe"],
+    "sneakers": ["running", "trainer", "casual", "sports", "chunky"],
+    "boots": ["chelsea", "chukka", "combat", "hiking", "work"],
+    "t shirts": ["graphic", "plain", "oversized", "v neck", "polo"],
+    "car polishes": ["wax", "polish", "compound", "sealant", "scratch remover"],
+    "cleaning kits": ["brush", "cloth", "sponge", "detergent", "spray"],
+    "exterior care": ["wax", "polish", "coating", "protectant"],
+}
 
 # -----------------------------
-# TOKEN EXTRACTION
+# MATCHING FUNCTION
 # -----------------------------
-def extract_tokens(text):
-    words = clean_text(text).split()
-    tokens = [w for w in words if w not in STOPWORDS and len(w) > 2]
-    return tokens
+def suggest_types_from_category(category):
+    category_lower = category.lower()
 
-# -----------------------------
-# CORE ENGINE
-# -----------------------------
-def auto_extract_types(df, category_col, title_col):
-    category_types = defaultdict(list)
+    for key in CATEGORY_LIBRARY:
+        if key in category_lower:
+            return CATEGORY_LIBRARY[key]
 
-    grouped = df.groupby(category_col)
-
-    for category, group in grouped:
-        counter = Counter()
-
-        for title in group[title_col]:
-            tokens = extract_tokens(title)
-            counter.update(tokens)
-
-        common_terms = [
-            word for word, freq in counter.most_common()
-            if freq >= MIN_FREQUENCY
-        ]
-
-        category_types[category] = common_terms[:15]
-
-    return category_types
+    return []
 
 # -----------------------------
-# FILE LOADER (CSV + XLSX)
+# STREAMLIT UI
+# -----------------------------
+st.set_page_config(page_title="Category Type Generator", layout="wide")
+
+st.title("🧠 Category-Based Product Type Generator")
+st.write("Works WITHOUT product data. Uses intelligent category matching.")
+
+uploaded_file = st.file_uploader("Upload category file (CSV or XLSX)", type=["csv", "xlsx"])
+
+# -----------------------------
+# FILE LOADER
 # -----------------------------
 def load_file(uploaded_file):
     if uploaded_file.name.endswith(".csv"):
@@ -64,16 +48,6 @@ def load_file(uploaded_file):
         st.error("Unsupported file format")
         return None
 
-# -----------------------------
-# STREAMLIT UI
-# -----------------------------
-st.set_page_config(page_title="Category Type Extractor", layout="wide")
-
-st.title("🧠 Auto Product Type Extraction")
-st.write("Upload your product dataset (CSV or XLSX) and automatically discover product types per category.")
-
-uploaded_file = st.file_uploader("Upload file", type=["csv", "xlsx"])
-
 if uploaded_file:
     df = load_file(uploaded_file)
 
@@ -81,27 +55,17 @@ if uploaded_file:
         st.subheader("Preview Data")
         st.dataframe(df.head())
 
-        columns = df.columns.tolist()
+        column = st.selectbox("Select Category Column", df.columns)
 
-        category_col = st.selectbox("Select Category Column", columns)
-        title_col = st.selectbox("Select Product Title Column", columns)
-
-        if st.button("Run Extraction"):
-            result = auto_extract_types(df, category_col, title_col)
-
-            output = []
-            for cat, types in result.items():
-                output.append({
-                    "category": cat,
-                    "suggested_types": ", ".join(types)
-                })
-
-            output_df = pd.DataFrame(output)
+        if st.button("Generate Types"):
+            df["suggested_types"] = df[column].apply(
+                lambda x: ", ".join(suggest_types_from_category(str(x)))
+            )
 
             st.subheader("Results")
-            st.dataframe(output_df)
+            st.dataframe(df)
 
-            csv = output_df.to_csv(index=False).encode("utf-8")
+            csv = df.to_csv(index=False).encode("utf-8")
             st.download_button(
                 label="Download Results",
                 data=csv,
@@ -110,16 +74,18 @@ if uploaded_file:
             )
 
 # -----------------------------
-# HOW IT WORKS
+# SIDEBAR INFO
 # -----------------------------
 st.sidebar.title("How it works")
 st.sidebar.write("""
-1. Upload product data (CSV or XLSX)
-2. System cleans text
-3. Removes common words (stopwords)
-4. Counts frequent terms per category
-5. Returns most common meaningful words as product types
+Since no product data is available, the system uses a predefined
+category intelligence library.
+
+It matches keywords inside category names and assigns likely product types.
 
 Example:
 Formal Shoes → oxford, derby, brogue
+Car Polishes → wax, polish, compound
+
+You can expand the CATEGORY_LIBRARY to improve accuracy.
 """)
