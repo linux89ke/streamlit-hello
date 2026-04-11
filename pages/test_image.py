@@ -53,55 +53,68 @@ def auto_extract_types(df, category_col, title_col):
     return category_types
 
 # -----------------------------
+# FILE LOADER (CSV + XLSX)
+# -----------------------------
+def load_file(uploaded_file):
+    if uploaded_file.name.endswith(".csv"):
+        return pd.read_csv(uploaded_file)
+    elif uploaded_file.name.endswith(".xlsx"):
+        return pd.read_excel(uploaded_file)
+    else:
+        st.error("Unsupported file format")
+        return None
+
+# -----------------------------
 # STREAMLIT UI
 # -----------------------------
 st.set_page_config(page_title="Category Type Extractor", layout="wide")
 
 st.title("🧠 Auto Product Type Extraction")
-st.write("Upload your product dataset and automatically discover product types per category.")
+st.write("Upload your product dataset (CSV or XLSX) and automatically discover product types per category.")
 
-uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
+uploaded_file = st.file_uploader("Upload file", type=["csv", "xlsx"])
 
 if uploaded_file:
-    df = pd.read_csv(uploaded_file)
+    df = load_file(uploaded_file)
 
-    st.subheader("Preview Data")
-    st.dataframe(df.head())
+    if df is not None:
+        st.subheader("Preview Data")
+        st.dataframe(df.head())
 
-    columns = df.columns.tolist()
+        columns = df.columns.tolist()
 
-    category_col = st.selectbox("Select Category Column", columns)
-    title_col = st.selectbox("Select Product Title Column", columns)
+        category_col = st.selectbox("Select Category Column", columns)
+        title_col = st.selectbox("Select Product Title Column", columns)
 
-    if st.button("Run Extraction"):
-        result = auto_extract_types(df, category_col, title_col)
+        if st.button("Run Extraction"):
+            result = auto_extract_types(df, category_col, title_col)
 
-        output = []
-        for cat, types in result.items():
-            output.append({
-                "category": cat,
-                "suggested_types": ", ".join(types)
-            })
+            output = []
+            for cat, types in result.items():
+                output.append({
+                    "category": cat,
+                    "suggested_types": ", ".join(types)
+                })
 
-        output_df = pd.DataFrame(output)
+            output_df = pd.DataFrame(output)
 
-        st.subheader("Results")
-        st.dataframe(output_df)
+            st.subheader("Results")
+            st.dataframe(output_df)
 
-        csv = output_df.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            label="Download Results",
-            data=csv,
-            file_name="category_type_suggestions.csv",
-            mime="text/csv"
-        )
+            csv = output_df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                label="Download Results",
+                data=csv,
+                file_name="category_type_suggestions.csv",
+                mime="text/csv"
+            )
 
 # -----------------------------
 # HOW IT WORKS
 # -----------------------------
 st.sidebar.title("How it works")
 st.sidebar.write("""
-1. Upload product data (category + title)
+1. Upload product data (CSV or XLSX)
 2. System cleans text
 3. Removes common words (stopwords)
 4. Counts frequent terms per category
