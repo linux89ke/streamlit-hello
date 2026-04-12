@@ -140,14 +140,14 @@ def render_results(preds, score_threshold, show_chart, show_hierarchy):
 
 with st.sidebar:
     st.markdown("## 🔑 Gemini API Key")
-    st.markdown('<div class="api-box">', unsafe_allow_html=True)
     default_key = os.environ.get("GEMINI_API_KEY", "")
     api_key = st.text_input(
-        "API Key", value=default_key, type="password",
-        placeholder="AIza…", label_visibility="collapsed",
+        "Paste your key here:",
+        value=default_key,
+        type="password",
+        placeholder="AIza…",
     )
-    st.markdown("Get a free key at [aistudio.google.com](https://aistudio.google.com/app/apikey)")
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.caption("Get a free key at [aistudio.google.com](https://aistudio.google.com/app/apikey)")
 
     st.markdown("---")
     st.markdown("## ⚙️ Settings")
