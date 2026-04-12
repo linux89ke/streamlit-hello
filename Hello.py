@@ -1,5 +1,5 @@
 """
-Product Category Predictor — powered by Google Gemini
+Product Category Predictor — powered by Groq (free tier)
 """
 
 import os
@@ -7,7 +7,7 @@ import json
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-import google.generativeai as genai
+from groq import Groq
 
 st.set_page_config(
     page_title="Product Category Predictor",
@@ -20,24 +20,25 @@ st.markdown("""
 <style>
     .main-title {
         font-size: 2.4rem; font-weight: 700;
-        background: linear-gradient(90deg, #4285f4 0%, #0f9d58 100%);
+        background: linear-gradient(90deg, #f55036 0%, #ff8c00 100%);
         -webkit-background-clip: text; -webkit-text-fill-color: transparent;
         margin-bottom: 0.2rem;
     }
     .subtitle { color: #888; font-size: 1rem; margin-bottom: 1.5rem; }
     .result-card {
-        background: #f8f9fc; border-left: 4px solid #4285f4;
+        background: #f8f9fc; border-left: 4px solid #f55036;
         padding: 0.8rem 1rem; border-radius: 0 8px 8px 0; margin-bottom: 0.5rem;
     }
     .stTextArea textarea { border-radius: 10px !important; border: 2px solid #e0e0f0 !important; }
-    .stTextArea textarea:focus { border-color: #4285f4 !important; }
-    .api-box { background: #f0f4ff; border: 1px solid #c7d7ff; border-radius: 12px; padding: 1.2rem; margin-bottom: 1rem; }
+    .stTextArea textarea:focus { border-color: #f55036 !important; }
 </style>
 """, unsafe_allow_html=True)
 
+# ─── Groq prediction ──────────────────────────────────────────────────────────
+
 SYSTEM_PROMPT = """You are a product categorization expert trained on Amazon's product catalog.
 Given a product title or description, return the top predicted categories with confidence scores.
-You MUST respond with valid JSON only — no markdown, no explanation, just the JSON object.
+You MUST respond with valid JSON only — no markdown, no explanation, just raw JSON.
 Format:
 {
   "categories": [
@@ -46,30 +47,28 @@ Format:
   ]
 }
 Rules:
-- Return exactly TOP_N categories, ordered by confidence descending
-- Use Amazon-style hierarchical category paths with " > " as separator
+- Return exactly TOP_N categories ordered by confidence descending
+- Use Amazon-style hierarchy with " > " as separator, 3-4 levels deep
 - Scores are floats between 0.0 and 1.0
-- Be specific — go 3-4 levels deep where possible
-- JSON only, nothing else"""
+- Raw JSON only, nothing else"""
 
 
-def predict_gemini(text, api_key, top_n, model_name):
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(
-        model_name=model_name,
-        system_instruction=SYSTEM_PROMPT.replace("TOP_N", str(top_n)),
+def predict_groq(text: str, api_key: str, top_n: int, model: str) -> list[dict]:
+    client = Groq(api_key=api_key)
+    response = client.chat.completions.create(
+        model=model,
+        temperature=0.1,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT.replace("TOP_N", str(top_n))},
+            {"role": "user", "content": f"Product: {text}"},
+        ],
     )
-    response = model.generate_content(
-        f"Product: {text}",
-        generation_config=genai.GenerationConfig(temperature=0.1, response_mime_type="application/json"),
-    )
-    raw = response.text.strip()
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    return json.loads(raw.strip()).get("categories", [])
+    raw = response.choices[0].message.content.strip()
+    return json.loads(raw).get("categories", [])
 
+
+# ─── Result renderer ──────────────────────────────────────────────────────────
 
 def render_results(preds, score_threshold, show_chart, show_hierarchy):
     preds = [p for p in preds if p.get("score", 0) >= score_threshold]
@@ -83,10 +82,10 @@ def render_results(preds, score_threshold, show_chart, show_hierarchy):
         st.markdown("#### 🎯 Top Predictions")
         for i, p in enumerate(preds):
             pct = p["score"] * 100
-            color = "#4285f4" if pct > 60 else "#34a853" if pct > 30 else "#a8d5b5"
+            color = "#f55036" if pct > 60 else "#ff8c00" if pct > 30 else "#ffd580"
             st.markdown(f"""
             <div class="result-card">
-              <span style="font-size:.72rem;font-weight:700;color:#4285f4;text-transform:uppercase;">#{i+1}</span>
+              <span style="font-size:.72rem;font-weight:700;color:#f55036;text-transform:uppercase;">#{i+1}</span>
               <div style="font-size:1rem;font-weight:600;color:#1a1a2e;">{p['category']}</div>
               <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
                 <div style="flex:1;height:6px;background:#e8eaf6;border-radius:3px;">
@@ -104,7 +103,7 @@ def render_results(preds, score_threshold, show_chart, show_hierarchy):
             fig = go.Figure(go.Bar(
                 x=df["score"] * 100, y=df["label"], orientation="h",
                 marker=dict(color=df["score"]*100,
-                            colorscale=[[0,"#a8d5b5"],[0.5,"#34a853"],[1,"#4285f4"]],
+                            colorscale=[[0,"#ffd580"],[0.5,"#ff8c00"],[1,"#f55036"]],
                             showscale=False),
                 text=[f"{s*100:.1f}%" for s in df["score"]],
                 textposition="outside",
@@ -139,21 +138,23 @@ def render_results(preds, score_threshold, show_chart, show_hierarchy):
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
 
 with st.sidebar:
-    st.markdown("## 🔑 Gemini API Key")
-    default_key = os.environ.get("GEMINI_API_KEY", "")
+    st.markdown("## 🔑 Groq API Key")
+    default_key = os.environ.get("GROQ_API_KEY", "")
     api_key = st.text_input(
         "Paste your key here:",
         value=default_key,
         type="password",
-        placeholder="AIza…",
+        placeholder="gsk_…",
     )
-    st.caption("Get a free key at [aistudio.google.com](https://aistudio.google.com/app/apikey)")
+    st.caption("Get a free key at [console.groq.com](https://console.groq.com)")
 
     st.markdown("---")
     st.markdown("## ⚙️ Settings")
-    model_choice    = st.selectbox("Gemini model",
-                                   ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"],
-                                   help="2.0 Flash is fastest. Pro is most accurate.")
+    model_choice = st.selectbox(
+        "Model",
+        ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"],
+        help="70b is most accurate. 8b is fastest. All are free tier.",
+    )
     top_n           = st.slider("Top N categories", 3, 20, 10)
     score_threshold = st.slider("Min confidence", 0.0, 1.0, 0.0, 0.05)
     show_chart      = st.checkbox("Show confidence chart", value=True)
@@ -161,21 +162,25 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("""### ℹ️ About
-Powered by **Google Gemini** — no model download, instant startup.
+Powered by **Groq** — free tier, no credit card needed.
 
-Categories follow Amazon's taxonomy with 3-4 level hierarchy.
+**Free limits:** 30 req/min, 14,400 req/day on 70b model.
 
-Free tier: 15 req/min on Flash models.""")
+Categories follow Amazon's taxonomy, 3-4 levels deep.
+
+Get your key at [console.groq.com](https://console.groq.com).""")
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 st.markdown('<p class="main-title">🏷️ Product Category Predictor</p>', unsafe_allow_html=True)
-st.markdown('<p class="subtitle">Predict Amazon-style product categories instantly — powered by Google Gemini, no model download needed.</p>', unsafe_allow_html=True)
+st.markdown('<p class="subtitle">Predict Amazon-style product categories instantly — powered by Groq, free tier, no download needed.</p>', unsafe_allow_html=True)
 
 if not api_key:
-    st.info("👈 Enter your Gemini API key in the sidebar to get started. Get one free at [aistudio.google.com](https://aistudio.google.com/app/apikey).")
+    st.info("👈 Enter your Groq API key in the sidebar to get started. Get one free (no credit card) at [console.groq.com](https://console.groq.com).")
     st.stop()
+
+# ─── Tabs ─────────────────────────────────────────────────────────────────────
 
 tab_single, tab_batch = st.tabs(["🔍 Single Predict", "📦 Batch Predict"])
 
@@ -208,9 +213,9 @@ with tab_single:
 
     if st.button("🔍 Predict Categories", type="primary", use_container_width=True):
         if product_text.strip():
-            with st.spinner("Asking Gemini…"):
+            with st.spinner("Asking Groq…"):
                 try:
-                    preds = predict_gemini(product_text, api_key, top_n, model_choice)
+                    preds = predict_groq(product_text, api_key, top_n, model_choice)
                     render_results(preds, score_threshold, show_chart, show_hierarchy)
                 except Exception as e:
                     st.error(f"Prediction failed: {e}")
@@ -233,9 +238,9 @@ with tab_batch:
             prog  = st.progress(0, text="Starting…")
             rows  = []
             for i, text in enumerate(texts):
-                prog.progress((i) / len(texts), text=f"Row {i+1} of {len(texts)}…")
+                prog.progress(i / len(texts), text=f"Row {i+1} of {len(texts)}…")
                 try:
-                    preds = predict_gemini(text, api_key, top_n_batch, model_choice)
+                    preds = predict_groq(text, api_key, top_n_batch, model_choice)
                     rows.append({
                         "input_text":   text,
                         "top_category": preds[0]["category"] if preds else "",
@@ -266,11 +271,11 @@ with tab_batch:
                 "The Great Gatsby Paperback – F. Scott Fitzgerald",
                 "Fitbit Charge 5 Advanced Fitness & Health Tracker",
             ]
-            with st.spinner("Asking Gemini…"):
+            with st.spinner("Asking Groq…"):
                 try:
                     rows = []
                     for text in sample:
-                        preds = predict_gemini(text, api_key, 3, model_choice)
+                        preds = predict_groq(text, api_key, 3, model_choice)
                         rows.append({
                             "title": text,
                             "top_category": preds[0]["category"] if preds else "",
