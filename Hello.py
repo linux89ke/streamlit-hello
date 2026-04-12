@@ -1,468 +1,490 @@
-import streamlit as st
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, WebDriverException
-from bs4 import BeautifulSoup
-from webdriver_manager.chrome import ChromeDriverManager
-from webdriver_manager.core.os_manager import ChromeType
-import pandas as pd
-import re
-import time
+"""
+Product Category Predictor — Streamlit App
+Uses the pretrained DistilBERT model from yang-zhang/product_category
+trained on Amazon product data (~1900 categories).
+"""
+
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import json
+import urllib.request
+from pathlib import Path
 
-# --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Marketplace Data Tool", page_icon="📊", layout="wide")
-st.title("🛒 E-Commerce Data Extractor (V10.1 - Stable)")
+import streamlit as st
+import torch
+import torch.nn as nn
+import pandas as pd
+import plotly.graph_objects as go
+from transformers import DistilBertTokenizer, DistilBertModel
 
-# --- SIDEBAR ---
-with st.sidebar:
-    st.header("⚙️ Settings")
-    region_choice = st.selectbox("Select Region:", ("Region 1 (KE)", "Region 2 (UG)"))
-    domain = "jumia.co.ke" if "KE" in region_choice else "jumia.ug"
-    st.markdown("---")
-    show_browser = st.checkbox("Show Browser (Debug Mode)", value=False)
-    max_workers = st.slider("Parallel Workers:", 1, 3, 2, help="More workers = faster but may cause timeouts")
-    timeout_seconds = st.slider("Page Timeout (seconds):", 10, 30, 20)
-    st.info(f"⚡ Using {max_workers} workers with {timeout_seconds}s timeout")
+# ─── Config ───────────────────────────────────────────────────────────────────
 
-# --- 1. DRIVER SETUP WITH BETTER ERROR HANDLING ---
-@st.cache_resource
-def get_driver_path():
-    """Cache driver installation."""
-    try:
-        return ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install()
-    except Exception:
-        try:
-            return ChromeDriverManager().install()
-        except Exception as e:
-            st.error(f"Could not install driver: {e}")
-            return None
+MODEL_URL = "https://github.com/yang-zhang/product_category/releases/download/v0.0.1/transformer_20210307D3.ckpt"
+MODEL_PATH = Path("data/transformer_20210307D3.ckpt")
+I2CAT_PATH = Path("data/i2cat.json")
+TOKENIZER_NAME = "distilbert-base-cased"
+MAX_SEQ_LENGTH = 128
+TOP_N_DEFAULT = 10
 
-def get_chrome_options(headless=True):
-    """Configure Chrome options for stability."""
-    chrome_options = Options()
-    if headless:
-        chrome_options.add_argument("--headless=new")
-    
-    # Essential stability arguments
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--disable-extensions")
-    chrome_options.add_argument("--window-size=1920,1080")
-    chrome_options.add_argument("--disable-notifications")
-    
-    # Reduce resource usage
-    chrome_options.add_argument("--disable-logging")
-    chrome_options.add_argument("--log-level=3")
-    chrome_options.add_argument("--silent")
-    
-    # Disable images for faster loading
-    prefs = {
-        "profile.managed_default_content_settings.images": 2,
-        "profile.default_content_setting_values.notifications": 2,
+# ─── Page setup ───────────────────────────────────────────────────────────────
+
+st.set_page_config(
+    page_title="Product Category Predictor",
+    page_icon="🏷️",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ─── Custom CSS ───────────────────────────────────────────────────────────────
+
+st.markdown("""
+<style>
+    .main-title {
+        font-size: 2.4rem;
+        font-weight: 700;
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 0.2rem;
     }
-    chrome_options.add_experimental_option("prefs", prefs)
-    chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
-    
-    chrome_options.add_argument(
-        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    .subtitle {
+        color: #888;
+        font-size: 1rem;
+        margin-bottom: 2rem;
+    }
+    .result-card {
+        background: #f8f9fc;
+        border-left: 4px solid #667eea;
+        padding: 1rem 1.2rem;
+        border-radius: 0 8px 8px 0;
+        margin-bottom: 0.6rem;
+    }
+    .category-rank {
+        font-size: 0.75rem;
+        font-weight: 700;
+        color: #667eea;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    .category-name {
+        font-size: 1.05rem;
+        font-weight: 600;
+        color: #1a1a2e;
+    }
+    .category-score {
+        font-size: 0.9rem;
+        color: #555;
+    }
+    .example-btn button {
+        background: transparent !important;
+        border: 1px solid #667eea !important;
+        color: #667eea !important;
+        border-radius: 20px !important;
+        padding: 0.2rem 0.8rem !important;
+        font-size: 0.82rem !important;
+    }
+    .stTextArea textarea {
+        border-radius: 10px !important;
+        border: 2px solid #e0e0f0 !important;
+        font-size: 1rem !important;
+    }
+    .stTextArea textarea:focus {
+        border-color: #667eea !important;
+        box-shadow: 0 0 0 2px rgba(102,126,234,0.2) !important;
+    }
+    .upload-section {
+        background: #f0f2ff;
+        border-radius: 12px;
+        padding: 1.2rem;
+        margin-top: 1rem;
+    }
+    .stProgress .st-bo { background: #667eea; }
+    div[data-testid="metric-container"] {
+        background: #f8f9fc;
+        border: 1px solid #e8eaf6;
+        border-radius: 10px;
+        padding: 0.8rem;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ─── Model definition (must match training architecture) ──────────────────────
+
+class ProductCategoryModel(nn.Module):
+    def __init__(self, num_labels: int, model_name: str = TOKENIZER_NAME):
+        super().__init__()
+        self.bert = DistilBertModel.from_pretrained(model_name)
+        self.classifier = nn.Linear(self.bert.config.hidden_size, num_labels)
+
+    def forward(self, input_ids, attention_mask):
+        outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
+        cls = outputs.last_hidden_state[:, 0, :]
+        return self.classifier(cls)
+
+
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+def download_model():
+    MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if not MODEL_PATH.exists():
+        with st.spinner("⬇️  Downloading pretrained model (first run only) …"):
+            progress = st.progress(0)
+
+            def reporthook(count, block_size, total_size):
+                if total_size > 0:
+                    progress.progress(min(int(count * block_size / total_size * 100), 100))
+
+            urllib.request.urlretrieve(MODEL_URL, MODEL_PATH, reporthook)
+            progress.empty()
+        st.success("Model downloaded!")
+
+
+def extract_i2cat_from_checkpoint(ckpt_path: Path) -> list[str]:
+    """Pull the i2cat list out of the Lightning checkpoint hyper_parameters."""
+    ckpt = torch.load(ckpt_path, map_location="cpu")
+    hp = ckpt.get("hyper_parameters", {})
+    # Try common keys
+    for key in ("i2cat", "idx_to_cat", "categories", "label_names"):
+        if key in hp:
+            return hp[key]
+    # Fallback: infer from classifier weight shape
+    state = ckpt.get("state_dict", {})
+    for k, v in state.items():
+        if "classifier" in k and v.ndim == 2:
+            n = v.shape[0]
+            return [f"Category_{i}" for i in range(n)]
+    raise ValueError("Could not find category list in checkpoint.")
+
+
+@st.cache_resource(show_spinner=False)
+def load_model_and_tokenizer():
+    download_model()
+
+    with st.spinner("🔧  Loading model …"):
+        ckpt = torch.load(MODEL_PATH, map_location="cpu")
+        state_dict = ckpt["state_dict"]
+
+        # Determine num_labels from classifier weight
+        cls_weight_key = next(k for k in state_dict if "classifier" in k and "weight" in k)
+        num_labels = state_dict[cls_weight_key].shape[0]
+
+        # Remap Lightning keys → plain PyTorch keys
+        new_state = {}
+        for k, v in state_dict.items():
+            # Lightning wraps model as self.model or direct attribute
+            new_key = k
+            for prefix in ("model.", "bert_model.", "transformer."):
+                if k.startswith(prefix):
+                    new_key = k[len(prefix):]
+                    break
+            new_state[new_key] = v
+
+        model = ProductCategoryModel(num_labels=num_labels)
+        missing, unexpected = model.load_state_dict(new_state, strict=False)
+        model.eval()
+
+        # Load / build i2cat
+        if I2CAT_PATH.exists():
+            with open(I2CAT_PATH) as f:
+                i2cat = json.load(f)
+        else:
+            try:
+                i2cat = extract_i2cat_from_checkpoint(MODEL_PATH)
+                I2CAT_PATH.parent.mkdir(parents=True, exist_ok=True)
+                with open(I2CAT_PATH, "w") as f:
+                    json.dump(i2cat, f)
+            except Exception:
+                i2cat = [f"Category_{i}" for i in range(num_labels)]
+
+        tokenizer = DistilBertTokenizer.from_pretrained(TOKENIZER_NAME)
+
+    return model, tokenizer, i2cat
+
+
+def predict(text: str, model, tokenizer, i2cat, top_n: int = TOP_N_DEFAULT):
+    encoding = tokenizer(
+        text,
+        max_length=MAX_SEQ_LENGTH,
+        padding="max_length",
+        truncation=True,
+        return_tensors="pt",
+    )
+    with torch.no_grad():
+        logits = model(encoding["input_ids"], encoding["attention_mask"])
+        probs = torch.sigmoid(logits).squeeze().numpy()
+
+    results = sorted(
+        [{"category": i2cat[i], "score": float(probs[i])} for i in range(len(i2cat))],
+        key=lambda x: x["score"],
+        reverse=True,
+    )
+    return results[:top_n]
+
+
+def batch_predict(texts: list[str], model, tokenizer, i2cat, top_n: int = 5):
+    results = []
+    for text in texts:
+        preds = predict(text, model, tokenizer, i2cat, top_n)
+        results.append({
+            "title": text,
+            "top_category": preds[0]["category"] if preds else "",
+            "top_score": round(preds[0]["score"], 4) if preds else 0,
+            "predictions": " | ".join(f"{p['category']} ({p['score']:.2%})" for p in preds[:3]),
+        })
+    return pd.DataFrame(results)
+
+
+# ─── Sidebar ──────────────────────────────────────────────────────────────────
+
+with st.sidebar:
+    st.markdown("## ⚙️  Settings")
+    top_n = st.slider("Top N categories", min_value=3, max_value=20, value=10)
+    score_threshold = st.slider("Confidence threshold", 0.0, 1.0, 0.0, 0.05,
+                                help="Hide predictions below this score")
+    show_chart = st.checkbox("Show confidence chart", value=True)
+    show_hierarchy = st.checkbox("Show category hierarchy", value=True)
+
+    st.markdown("---")
+    st.markdown("### ℹ️  About")
+    st.markdown("""
+    Pretrained on **500K Amazon products** across **~1,900 categories** using:
+    - `distilbert-base-cased`
+    - Multi-label classification
+    - [Source repo](https://github.com/yang-zhang/product_category)
+
+    > *For research purposes only.*
+    """)
+
+# ─── Main UI ──────────────────────────────────────────────────────────────────
+
+st.markdown('<p class="main-title">🏷️ Product Category Predictor</p>', unsafe_allow_html=True)
+st.markdown('<p class="subtitle">Predict Amazon-style product categories from titles or descriptions using a pretrained DistilBERT model.</p>', unsafe_allow_html=True)
+
+# Load model
+try:
+    model, tokenizer, i2cat = load_model_and_tokenizer()
+    st.success(f"✅  Model ready — {len(i2cat):,} categories loaded", icon="✅")
+except Exception as e:
+    st.error(f"Failed to load model: {e}")
+    st.stop()
+
+# Tabs
+tab_single, tab_batch, tab_explore = st.tabs(["🔍 Single Predict", "📦 Batch Predict", "🗂️ Explore Categories"])
+
+# ── Tab 1: Single prediction ──────────────────────────────────────────────────
+with tab_single:
+    st.markdown("### Enter a product title or description")
+
+    EXAMPLES = [
+        "Lykmera Famous TikTok Leggings, High Waist Yoga Pants for Women, Booty Bubble Butt Lifting Workout Running Tights",
+        "Apple AirPods Pro (2nd Generation) Wireless Earbuds with USB-C Charging",
+        "LEGO Star Wars: The Skywalker Saga Deluxe Edition - Nintendo Switch",
+        "KitchenAid 5-Quart Artisan Stand Mixer with Dough Hook, Flat Beater and Wire Whip",
+        "Harry Potter and the Sorcerer's Stone Hardcover Book",
+        "Neutrogena Hydro Boost Hyaluronic Acid Hydrating Daily Face Moisturizer",
+    ]
+
+    st.markdown("**Quick examples:**")
+    cols = st.columns(3)
+    for i, ex in enumerate(EXAMPLES):
+        short = ex[:45] + "…" if len(ex) > 45 else ex
+        if cols[i % 3].button(short, key=f"ex_{i}", use_container_width=True):
+            st.session_state["product_text"] = ex
+
+    product_text = st.text_area(
+        "Product text",
+        value=st.session_state.get("product_text", ""),
+        height=100,
+        placeholder="e.g. Nike Air Max 270 Men's Running Shoes …",
+        label_visibility="collapsed",
     )
 
-    # Detect browser binary
-    possible_paths = [
-        "/usr/bin/chromium", 
-        "/usr/bin/chromium-browser", 
-        "/usr/bin/google-chrome-stable",
-        "/usr/bin/google-chrome"
-    ]
-    for path in possible_paths:
-        if os.path.exists(path):
-            chrome_options.binary_location = path
-            break
-    
-    return chrome_options
+    predict_btn = st.button("🔍  Predict Categories", type="primary", use_container_width=True)
 
-def get_driver(headless=True, timeout=20):
-    """Create WebDriver with comprehensive error handling."""
-    chrome_options = get_chrome_options(headless)
-    driver = None
-    
-    try:
-        driver_path = get_driver_path()
-        if not driver_path:
-            return None
-            
-        service = Service(driver_path)
-        service.log_path = os.devnull  # Suppress logs
-        driver = webdriver.Chrome(service=service, options=chrome_options)
-        
-    except Exception as e:
-        try:
-            # Fallback without explicit service
-            driver = webdriver.Chrome(options=chrome_options)
-        except Exception as e2:
-            return None
+    if predict_btn and product_text.strip():
+        with st.spinner("Predicting …"):
+            preds = predict(product_text, model, tokenizer, i2cat, top_n)
 
-    if driver:
-        try:
-            driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-            driver.set_page_load_timeout(timeout)
-            driver.implicitly_wait(5)
-        except Exception:
-            pass
-    
-    return driver
+        preds = [p for p in preds if p["score"] >= score_threshold]
 
-# --- 2. INPUT PROCESSING ---
-def process_inputs(text_input, file_input, default_domain):
-    """Process inputs efficiently."""
-    raw_items = set()
-    
-    if text_input:
-        items = re.split(r'[\n,]', text_input)
-        raw_items.update(i.strip() for i in items if i.strip())
-    
-    if file_input:
-        try:
-            df = pd.read_excel(file_input, header=None) if file_input.name.endswith('.xlsx') \
-                 else pd.read_csv(file_input, header=None)
-            
-            raw_items.update(
-                str(cell).strip() 
-                for cell in df.values.flatten() 
-                if str(cell).strip() and str(cell).lower() != 'nan'
-            )
-        except Exception as e:
-            st.error(f"Error reading file: {e}")
-
-    final_targets = []
-    for item in raw_items:
-        clean_val = item.replace("SKU:", "").strip()
-        
-        if "http" in clean_val or "www." in clean_val:
-            if not clean_val.startswith("http"):
-                clean_val = "https://" + clean_val
-            final_targets.append({"type": "url", "value": clean_val})
-        elif len(clean_val) > 3:
-            search_url = f"https://www.{default_domain}/catalog/?q={clean_val}"
-            final_targets.append({"type": "sku", "value": search_url, "original_sku": clean_val})
-    
-    return final_targets
-
-# --- 3. SCRAPING WITH RETRY LOGIC ---
-def extract_product_data(soup, data, is_sku_search, target):
-    """Extract product data from HTML."""
-    
-    # Product Name
-    h1 = soup.find('h1')
-    data['Product Name'] = h1.text.strip() if h1 else "N/A"
-
-    # Brand
-    brand_label = soup.find(string=re.compile(r"Brand:\s*"))
-    if brand_label and brand_label.parent:
-        brand_link = brand_label.parent.find('a')
-        data['Brand'] = brand_link.text.strip() if brand_link else \
-                       brand_label.parent.get_text().replace('Brand:', '').split('|')[0].strip()
-    
-    if data['Brand'] in ["N/A", ""] or "generic" in data['Brand'].lower():
-        data['Brand'] = data['Product Name'].split()[0] if data['Product Name'] != "N/A" else "N/A"
-
-    # Seller
-    seller_box = soup.select_one('div.-hr.-pas, div.seller-details')
-    if seller_box:
-        p_tag = seller_box.find('p', class_='-m')
-        if p_tag:
-            seller_text = p_tag.text.strip()
-            if not any(x in seller_text.lower() for x in ['details', 'follow', 'sell on']):
-                data['Seller Name'] = seller_text
-
-    # Category
-    breadcrumbs = soup.select('.osh-breadcrumb a, .brcbs a')
-    cats = [b.text.strip() for b in breadcrumbs if b.text.strip()]
-    data['Category'] = cats[1] if len(cats) > 1 else (cats[0] if cats else "N/A")
-
-    # SKU
-    sku_match = re.search(r'SKU[:\s]*([A-Z0-9\-]+)', soup.get_text())
-    if sku_match:
-        data['SKU'] = sku_match.group(1)
-    elif is_sku_search:
-        data['SKU'] = target.get('original_sku', 'N/A')
-
-    # Images
-    for img in soup.find_all('img', limit=5):
-        src = img.get('data-src') or img.get('src')
-        if src and '/product/' in src:
-            if src.startswith('//'):
-                src = 'https:' + src
-            if src not in data['Image URLs']:
-                data['Image URLs'].append(src)
-                break
-
-    # Express
-    if soup.find('svg', attrs={'aria-label': 'Jumia Express'}):
-        data['Express'] = "Yes"
-    
-    return data
-
-def scrape_item_with_retry(target, headless=True, timeout=20, max_retries=2):
-    """Scrape with retry logic for failed attempts."""
-    for attempt in range(max_retries):
-        result = scrape_item(target, headless, timeout)
-        
-        # If successful or SKU not found, return immediately
-        if result['Product Name'] not in ['ERROR_FETCHING', 'TIMEOUT', 'SYSTEM_ERROR']:
-            return result
-        
-        # Wait before retry
-        if attempt < max_retries - 1:
-            time.sleep(2)
-    
-    return result
-
-def scrape_item(target, headless=True, timeout=20):
-    """Scrape a single item with comprehensive error handling."""
-    driver = None
-    url = target['value']
-    is_sku_search = target['type'] == 'sku'
-    
-    data = {
-        'Input Source': target.get('original_sku', url),
-        'Product Name': 'N/A',
-        'Brand': 'N/A',
-        'Seller Name': 'N/A',
-        'Category': 'N/A',
-        'SKU': 'N/A',
-        'Image URLs': [],
-        ' ': '',
-        'Express': 'No'
-    }
-
-    try:
-        driver = get_driver(headless, timeout)
-        if not driver:
-            data['Product Name'] = 'SYSTEM_ERROR'
-            return data
-
-        # Navigate to URL
-        try:
-            driver.get(url)
-        except TimeoutException:
-            data['Product Name'] = 'TIMEOUT'
-            return data
-        except WebDriverException as e:
-            data['Product Name'] = 'CONNECTION_ERROR'
-            return data
-        
-        # Handle SKU search
-        if is_sku_search:
-            try:
-                WebDriverWait(driver, 8).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "article.prd, h1"))
-                )
-                
-                if "There are no results for" in driver.page_source:
-                    data['Product Name'] = "SKU_NOT_FOUND"
-                    return data
-                
-                product_links = driver.find_elements(By.CSS_SELECTOR, "article.prd a.core")
-                if product_links:
-                    try:
-                        driver.get(product_links[0].get_attribute("href"))
-                    except TimeoutException:
-                        data['Product Name'] = 'TIMEOUT'
-                        return data
-            except TimeoutException:
-                data['Product Name'] = 'TIMEOUT'
-                return data
-            except Exception:
-                pass
-
-        # Wait for page content
-        try:
-            WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.TAG_NAME, "h1"))
-            )
-        except TimeoutException:
-            data['Product Name'] = 'TIMEOUT'
-            return data
-        
-        # Quick scroll and wait
-        try:
-            driver.execute_script("window.scrollTo(0, 600);")
-            time.sleep(0.5)
-        except Exception:
-            pass
-        
-        # Parse HTML
-        soup = BeautifulSoup(driver.page_source, 'html.parser')
-        data = extract_product_data(soup, data, is_sku_search, target)
-
-    except TimeoutException:
-        data['Product Name'] = "TIMEOUT"
-    except WebDriverException:
-        data['Product Name'] = "CONNECTION_ERROR"
-    except Exception as e:
-        data['Product Name'] = "ERROR_FETCHING"
-    finally:
-        if driver:
-            try:
-                driver.quit()
-            except Exception:
-                pass
-    
-    return data
-
-# --- 4. PARALLEL PROCESSING ---
-def scrape_items_parallel(targets, max_workers, headless=True, timeout=20):
-    """Scrape multiple items in parallel."""
-    results = []
-    failed = []
-    
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_target = {
-            executor.submit(scrape_item_with_retry, target, headless, timeout): target 
-            for target in targets
-        }
-        
-        for future in as_completed(future_to_target):
-            target = future_to_target[future]
-            try:
-                result = future.result()
-                if result['Product Name'] in ["SYSTEM_ERROR", "TIMEOUT", "CONNECTION_ERROR"]:
-                    failed.append({
-                        'input': target.get('original_sku', target['value']),
-                        'error': result['Product Name']
-                    })
-                elif result['Product Name'] != "SKU_NOT_FOUND":
-                    results.append(result)
-            except Exception as e:
-                failed.append({
-                    'input': target.get('original_sku', target['value']),
-                    'error': str(e)
-                })
-    
-    return results, failed
-
-# --- MAIN APP ---
-if 'scraped_results' not in st.session_state:
-    st.session_state['scraped_results'] = []
-if 'failed_items' not in st.session_state:
-    st.session_state['failed_items'] = []
-
-col_txt, col_upl = st.columns(2)
-with col_txt:
-    text_in = st.text_area("Paste SKUs/Links:", height=150, 
-                           placeholder="Enter SKUs or URLs, one per line")
-with col_upl:
-    file_in = st.file_uploader("Upload Excel/CSV:", type=['xlsx', 'csv'])
-
-if st.button("🚀 Start Extraction", type="primary"):
-    targets = process_inputs(text_in, file_in, domain)
-    
-    if not targets:
-        st.warning("⚠️ No valid data found. Please enter SKUs or URLs.")
-    else:
-        st.session_state['scraped_results'] = []
-        st.session_state['failed_items'] = []
-        
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        status_text.text(f"🔄 Processing {len(targets)} items with {max_workers} workers...")
-        start_time = time.time()
-        
-        # Process in batches
-        batch_size = max_workers * 2
-        all_results = []
-        all_failed = []
-        
-        for i in range(0, len(targets), batch_size):
-            batch = targets[i:i + batch_size]
-            batch_results, batch_failed = scrape_items_parallel(
-                batch, max_workers, not show_browser, timeout_seconds
-            )
-            
-            all_results.extend(batch_results)
-            all_failed.extend(batch_failed)
-            
-            progress = min((i + len(batch)) / len(targets), 1.0)
-            progress_bar.progress(progress)
-            status_text.text(
-                f"🔄 Processed {min(i + len(batch), len(targets))}/{len(targets)} items..."
-            )
-        
-        elapsed = time.time() - start_time
-        st.session_state['scraped_results'] = all_results
-        st.session_state['failed_items'] = all_failed
-        
-        success_count = len(all_results)
-        failed_count = len(all_failed)
-        
-        if failed_count > 0:
-            status_text.warning(
-                f"⚠️ Completed with issues: {success_count} successful, {failed_count} failed "
-                f"({elapsed:.1f}s)"
-            )
+        if not preds:
+            st.warning("No categories above the confidence threshold.")
         else:
-            status_text.success(
-                f"✅ Done! Processed {len(targets)} items in {elapsed:.1f}s "
-                f"({len(targets)/elapsed:.1f} items/sec)"
+            col_results, col_chart = st.columns([1, 1]) if show_chart else (st, None)
+
+            with col_results:
+                st.markdown("#### 🎯 Top Predictions")
+                for i, p in enumerate(preds):
+                    pct = p["score"] * 100
+                    bar_width = int(pct)
+                    color = "#667eea" if pct > 60 else "#a78bfa" if pct > 30 else "#c4b5fd"
+                    st.markdown(f"""
+                    <div class="result-card">
+                      <span class="category-rank">#{i+1}</span>
+                      <div class="category-name">{p['category']}</div>
+                      <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+                        <div style="flex:1;height:6px;background:#e8eaf6;border-radius:3px;">
+                          <div style="width:{bar_width}%;height:100%;background:{color};border-radius:3px;"></div>
+                        </div>
+                        <span class="category-score">{pct:.1f}%</span>
+                      </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            if show_chart and col_chart:
+                with col_chart:
+                    st.markdown("#### 📊 Confidence Chart")
+                    df = pd.DataFrame(preds).sort_values("score")
+                    fig = go.Figure(go.Bar(
+                        x=df["score"] * 100,
+                        y=df["category"],
+                        orientation="h",
+                        marker=dict(
+                            color=df["score"] * 100,
+                            colorscale=[[0, "#c4b5fd"], [0.5, "#a78bfa"], [1, "#667eea"]],
+                            showscale=False,
+                        ),
+                        text=[f"{s*100:.1f}%" for s in df["score"]],
+                        textposition="outside",
+                    ))
+                    fig.update_layout(
+                        xaxis_title="Confidence (%)",
+                        margin=dict(l=0, r=60, t=10, b=30),
+                        height=max(300, len(preds) * 36),
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        font=dict(size=12),
+                        xaxis=dict(range=[0, 110]),
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+            if show_hierarchy:
+                st.markdown("#### 🌲 Category Hierarchy")
+                seen_roots = set()
+                tree_lines = []
+                for p in preds:
+                    parts = p["category"].split("|") if "|" in p["category"] else p["category"].split(" > ")
+                    parts = [x.strip() for x in parts if x.strip()]
+                    if len(parts) > 1:
+                        root = parts[0]
+                        if root not in seen_roots:
+                            tree_lines.append(f"📁 **{root}**")
+                            seen_roots.add(root)
+                        for depth, part in enumerate(parts[1:], 1):
+                            tree_lines.append(f"{'  ' * depth}└─ {part}")
+                    else:
+                        tree_lines.append(f"🏷️ {p['category']}")
+                if tree_lines:
+                    st.markdown("\n".join(tree_lines))
+
+    elif predict_btn:
+        st.warning("Please enter some product text first.")
+
+# ── Tab 2: Batch prediction ───────────────────────────────────────────────────
+with tab_batch:
+    st.markdown("### Batch predict from a CSV file")
+    st.markdown("Upload a CSV with a **`title`** column (or any text column) to predict categories in bulk.")
+
+    uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
+
+    if uploaded_file:
+        df_input = pd.read_csv(uploaded_file)
+        st.markdown(f"**{len(df_input):,} rows loaded.** Preview:")
+        st.dataframe(df_input.head(5), use_container_width=True)
+
+        text_col = st.selectbox("Select the text column", df_input.columns.tolist())
+        top_n_batch = st.slider("Top N per product", 1, 10, 3, key="batch_topn")
+
+        if st.button("🚀  Run Batch Prediction", type="primary"):
+            texts = df_input[text_col].astype(str).tolist()
+            progress_bar = st.progress(0)
+            results = []
+            for i, text in enumerate(texts):
+                preds = predict(text, model, tokenizer, i2cat, top_n_batch)
+                results.append({
+                    "input_text": text,
+                    "top_category": preds[0]["category"] if preds else "",
+                    "top_score": round(preds[0]["score"], 4) if preds else 0,
+                    "top_3_predictions": " | ".join(
+                        f"{p['category']} ({p['score']:.2%})" for p in preds[:3]
+                    ),
+                })
+                progress_bar.progress((i + 1) / len(texts))
+
+            progress_bar.empty()
+            df_out = pd.DataFrame(results)
+            st.success(f"Done! Predicted {len(df_out):,} products.")
+            st.dataframe(df_out, use_container_width=True)
+
+            csv_bytes = df_out.to_csv(index=False).encode()
+            st.download_button(
+                "⬇️  Download Results CSV",
+                data=csv_bytes,
+                file_name="predictions.csv",
+                mime="text/csv",
             )
-        
-        time.sleep(1)
-        st.rerun()
+    else:
+        st.markdown("""
+        <div class="upload-section">
+        <b>Expected CSV format:</b><br><br>
+        <code>title,brand,price</code><br>
+        <code>Nike Air Max 270,Nike,150</code><br>
+        <code>KitchenAid Stand Mixer 5qt,KitchenAid,399</code><br>
+        </div>
+        """, unsafe_allow_html=True)
 
-# --- DISPLAY RESULTS ---
-if st.session_state['scraped_results'] or st.session_state['failed_items']:
-    st.markdown("---")
-    
-    # Show failed items if any
-    if st.session_state['failed_items']:
-        with st.expander(f"⚠️ Failed Items ({len(st.session_state['failed_items'])})", expanded=False):
-            failed_df = pd.DataFrame(st.session_state['failed_items'])
-            st.dataframe(failed_df, use_container_width=True)
-            st.info("💡 Tip: Try reducing parallel workers or increasing timeout for better reliability.")
-    
-    # Show successful results
-    if st.session_state['scraped_results']:
-        export_rows = []
-        for item in st.session_state['scraped_results']:
-            row = item.copy()
-            row['Image URL'] = row['Image URLs'][0] if row['Image URLs'] else "N/A"
-            del row['Image URLs']
-            export_rows.append(row)
-        
-        df = pd.DataFrame(export_rows)
-        cols = ['Seller Name', 'SKU', 'Product Name', 'Brand', 'Category', 'Image URL', ' ', 'Express', 'Input Source']
-        df = df[[c for c in cols if c in df.columns]]
-        
-        # Stats
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("✅ Successful", len(df))
-        with col2:
-            st.metric("🏷️ Unique Brands", df['Brand'].nunique())
-        with col3:
-            st.metric("⚡ Express Items", (df['Express'] == 'Yes').sum())
-        with col4:
-            st.metric("❌ Failed", len(st.session_state['failed_items']))
-        
-        st.dataframe(df, use_container_width=True)
-        
-        csv = df.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            "📥 Download Results (CSV)",
-            csv,
-            f"jumia_data_{int(time.time())}.csv",
-            "text/csv",
-            key='download-csv'
-        )
+        st.markdown("#### Or try a sample dataset:")
+        sample_data = pd.DataFrame({
+            "title": [
+                "Sony WH-1000XM5 Wireless Noise Canceling Headphones",
+                "Instant Pot Duo 7-in-1 Electric Pressure Cooker 6 Qt",
+                "Hydro Flask Water Bottle 32 oz Wide Mouth",
+                "The Great Gatsby Paperback – F. Scott Fitzgerald",
+                "Fitbit Charge 5 Advanced Fitness & Health Tracker",
+            ]
+        })
+        if st.button("▶️  Run on Sample Data"):
+            texts = sample_data["title"].tolist()
+            results = []
+            with st.spinner("Predicting …"):
+                for text in texts:
+                    preds = predict(text, model, tokenizer, i2cat, 3)
+                    results.append({
+                        "title": text,
+                        "top_category": preds[0]["category"] if preds else "",
+                        "predictions": " | ".join(f"{p['category']} ({p['score']:.1%})" for p in preds[:3]),
+                    })
+            st.dataframe(pd.DataFrame(results), use_container_width=True)
 
+# ── Tab 3: Explore categories ─────────────────────────────────────────────────
+with tab_explore:
+    st.markdown("### 🗂️ Explore Available Categories")
+    st.markdown(f"The model knows **{len(i2cat):,} categories** trained from Amazon product data.")
+
+    search_term = st.text_input("🔎 Search categories", placeholder="e.g. Electronics, Shoes, Kitchen …")
+
+    cats = i2cat if isinstance(i2cat, list) else list(i2cat.values())
+
+    if search_term:
+        filtered = [c for c in cats if search_term.lower() in c.lower()]
+        st.markdown(f"**{len(filtered)} matches** for '{search_term}':")
+        for c in filtered[:100]:
+            st.markdown(f"- {c}")
+        if len(filtered) > 100:
+            st.info(f"Showing first 100 of {len(filtered)} matches.")
+    else:
+        # Show top-level categories
+        roots = set()
+        for c in cats:
+            parts = c.split("|") if "|" in c else c.split(" > ")
+            roots.add(parts[0].strip())
+
+        roots = sorted(roots)
+        st.markdown(f"**{len(roots)} top-level categories:**")
+        cols = st.columns(3)
+        for i, r in enumerate(roots):
+            cols[i % 3].markdown(f"- {r}")
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total Categories", f"{len(cats):,}")
+    col2.metric("Training Products", "500K")
+    col3.metric("Base Model", "DistilBERT")
