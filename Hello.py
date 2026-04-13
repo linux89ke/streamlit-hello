@@ -49,8 +49,8 @@ def path_to_doc(path: str) -> str:
 
 @st.cache_resource(show_spinner=False)
 def build_index(file_path: str):
-    # Read the CSV file directly from the local directory
-    df = pd.read_csv(file_path)
+    # Read the Excel file directly from the local directory
+    df = pd.read_excel(file_path)
     
     # Extract the third column (Category Path) as per original logic
     all_paths = df.iloc[:, 2].dropna().astype(str).tolist()
@@ -294,14 +294,14 @@ if not api_key:
     st.info("Enter your Groq API key in the sidebar.")
     st.stop()
 
-# Ensure local file exists
-csv_path = "category_map1.csv"
-if not os.path.exists(csv_path):
-    st.error(f"Required file '{csv_path}' not found in the script directory.")
+# Ensure local Excel file exists
+excel_path = "category_map1.xlsx"
+if not os.path.exists(excel_path):
+    st.error(f"Required file '{excel_path}' not found in the script directory.")
     st.stop()
 
 with st.spinner("Building category index (one-time ~2s)…"):
-    leaves, vectorizer, matrix, all_paths = build_index(csv_path)
+    leaves, vectorizer, matrix, all_paths = build_index(excel_path)
 
 st.success(f"Successfully indexed {len(leaves):,} leaf categories.")
 
