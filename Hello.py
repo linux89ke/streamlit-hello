@@ -7,7 +7,6 @@ Cost     : 1 Groq call per product
 
 import os, io, json, asyncio
 import numpy as np
-import openpyxl
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -15,8 +14,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from groq import AsyncGroq
 
-st.set_page_config(page_title="Product Category Predictor", page_icon="🏷️",
-                   layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Product Category Predictor", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
 <style>
@@ -50,10 +48,13 @@ def path_to_doc(path: str) -> str:
 
 
 @st.cache_resource(show_spinner=False)
-def build_index(file_bytes: bytes):
-    wb = openpyxl.load_workbook(io.BytesIO(file_bytes))
-    ws = wb.active
-    all_paths = [row[2] for row in ws.iter_rows(min_row=2, values_only=True) if row[2]]
+def build_index(file_path: str):
+    # Read the CSV file directly from the local directory
+    df = pd.read_csv(file_path)
+    
+    # Extract the third column (Category Path) as per original logic
+    all_paths = df.iloc[:, 2].dropna().astype(str).tolist()
+    
     path_set  = set(all_paths)
     leaves    = [p for p in all_paths
                  if not any(other.startswith(p + " / ") for other in path_set)]
@@ -190,7 +191,7 @@ def render_results(preds, score_threshold, show_chart, show_hierarchy):
     left, right = (st.columns([1, 1]) if show_chart else (st, None))
 
     with left:
-        st.markdown("#### 🎯 Top Predictions")
+        st.markdown("#### Top Predictions")
         for i, p in enumerate(preds):
             pct   = p["score"] * 100
             color = "#f55036" if pct > 60 else "#ff8c00" if pct > 30 else "#ffd580"
@@ -208,7 +209,7 @@ def render_results(preds, score_threshold, show_chart, show_hierarchy):
 
     if show_chart and right:
         with right:
-            st.markdown("#### 📊 Confidence Chart")
+            st.markdown("#### Confidence Chart")
             df = pd.DataFrame(preds).sort_values("score")
             df["label"] = df["category"].apply(
                 lambda x: " / ".join(x.split(" / ")[-2:]) if " / " in x else x)
@@ -236,34 +237,28 @@ def render_results(preds, score_threshold, show_chart, show_hierarchy):
             parts = [x.strip() for x in p["category"].split(" / ") if x.strip()]
             if len(parts) > 1:
                 if parts[0] not in seen:
-                    lines.append(f"📁 **{parts[0]}**")
+                    lines.append(f"**{parts[0]}**")
                     seen.add(parts[0])
                 for d, part in enumerate(parts[1:], 1):
                     lines.append(f"{'  '*d}└─ {part}")
             else:
-                lines.append(f"🏷️ {p['category']}")
+                lines.append(f"{p['category']}")
         if lines:
-            st.markdown("#### 🌲 Category Hierarchy")
+            st.markdown("#### Category Hierarchy")
             st.markdown("\n".join(lines))
 
 
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
 
 with st.sidebar:
-    st.markdown("## 🔑 Groq API Key")
+    st.markdown("## Groq API Key")
     api_key = st.text_input("Paste your key here:",
                             value=os.environ.get("GROQ_API_KEY", ""),
                             type="password", placeholder="gsk_…")
     st.caption("Free key at [console.groq.com](https://console.groq.com)")
 
     st.markdown("---")
-    st.markdown("## 📂 Category Map")
-    cat_file = st.file_uploader("Upload category_map.xlsx", type=["xlsx"])
-    if cat_file:
-        st.success(f"✅ {cat_file.name} loaded")
-
-    st.markdown("---")
-    st.markdown("## ⚙️ Settings")
+    st.markdown("## Settings")
     model_choice = st.selectbox(
         "Groq model",
         ["llama-3.1-8b-instant", "llama-3.3-70b-versatile", "mixtral-8x7b-32768"],
@@ -280,7 +275,7 @@ with st.sidebar:
     show_hierarchy = st.checkbox("Show category hierarchy", value=True)
 
     st.markdown("---")
-    st.markdown("""### ℹ️ How it works
+    st.markdown("""### How it works
 **Step 1 — TF-IDF** (free, ~10ms total for any batch)
 Shortlists 30 leaf candidates per product in one matrix op.
 
@@ -292,25 +287,27 @@ Parallel calls return together in ~2s regardless of batch size.
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
-st.markdown('<p class="main-title">🏷️ Product Category Predictor</p>', unsafe_allow_html=True)
+st.markdown('<p class="main-title">Product Category Predictor</p>', unsafe_allow_html=True)
 st.markdown('<p class="subtitle">TF-IDF shortlist + async parallel Groq — fast, accurate, 1 API call per product.</p>', unsafe_allow_html=True)
 
 if not api_key:
-    st.info("👈 Enter your Groq API key in the sidebar.")
+    st.info("Enter your Groq API key in the sidebar.")
     st.stop()
-if not cat_file:
-    st.info("👈 Upload your `category_map.xlsx` in the sidebar.")
+
+# Ensure local file exists
+csv_path = "category_map1.csv"
+if not os.path.exists(csv_path):
+    st.error(f"Required file '{csv_path}' not found in the script directory.")
     st.stop()
 
 with st.spinner("Building category index (one-time ~2s)…"):
-    file_bytes = cat_file.read()
-    leaves, vectorizer, matrix, all_paths = build_index(file_bytes)
+    leaves, vectorizer, matrix, all_paths = build_index(csv_path)
 
-st.success(f"✅ {len(leaves):,} leaf categories indexed")
+st.success(f"Successfully indexed {len(leaves):,} leaf categories.")
 
 # ─── Tabs ─────────────────────────────────────────────────────────────────────
 
-tab_single, tab_batch, tab_explore = st.tabs(["🔍 Single Predict", "📦 Batch Predict", "🗂️ Explore"])
+tab_single, tab_batch, tab_explore = st.tabs(["Single Predict", "Batch Predict", "Explore"])
 
 EXAMPLES = [
     "Baggy Unit Denim Jeans Men's Streetwear",
@@ -346,7 +343,7 @@ with tab_single:
             help="Helps Groq disambiguate — e.g. Apple → Electronics not Grocery.",
         )
 
-    if st.button("🔍 Predict", type="primary", use_container_width=True):
+    if st.button("Predict", type="primary", use_container_width=True):
         if product_text.strip():
             query = f"{brand.strip()} {product_text.strip()}".strip() if brand.strip() else product_text.strip()
             with st.spinner("Shortlisting…"):
@@ -355,7 +352,7 @@ with tab_single:
                 try:
                     preds = sync_rerank(query, candidates, api_key, model_choice, top_n)
                     render_results(preds, score_threshold, show_chart, show_hierarchy)
-                    with st.expander(f"🔎 {len(candidates)} candidates sent to Groq"):
+                    with st.expander(f"{len(candidates)} candidates sent to Groq"):
                         for c in candidates:
                             st.markdown(f"- {c}")
                 except Exception as e:
@@ -368,13 +365,13 @@ with tab_batch:
     st.markdown("### Batch predict")
     top_n_batch = st.slider("Top N per product", 1, 5, 1, key="batch_topn")
     input_mode  = st.radio("Input method",
-                           ["📂 Upload file (CSV or Excel)", "📋 Paste a list"],
+                           ["Upload file (CSV or Excel)", "Paste a list"],
                            horizontal=True)
 
     texts  = []
     brands = []
 
-    if input_mode == "📂 Upload file (CSV or Excel)":
+    if input_mode == "Upload file (CSV or Excel)":
         uploaded = st.file_uploader("Upload CSV or Excel", type=["csv","xlsx","xls"])
         if uploaded:
             try:
@@ -393,7 +390,7 @@ with tab_batch:
                     text_col = st.selectbox("Product title column", df_input.columns.tolist())
                 with col_bc:
                     brand_col = st.selectbox("Brand column *(optional)*",
-                                            ["— none —"] + df_input.columns.tolist())
+                                             ["— none —"] + df_input.columns.tolist())
                 texts  = df_input[text_col].astype(str).fillna("").tolist()
                 brands = (df_input[brand_col].astype(str).fillna("").tolist()
                           if brand_col != "— none —" else [""] * len(texts))
@@ -415,9 +412,9 @@ with tab_batch:
 
     if texts:
         est_secs = max(2, len(texts) // concurrency + 2)
-        st.info(f"⚡ **{len(texts)} products** will run {concurrency} at a time — estimated **~{est_secs}s** total.")
+        st.info(f"**{len(texts)} products** will run {concurrency} at a time — estimated **~{est_secs}s** total.")
 
-        if st.button("🚀 Run Batch Prediction", type="primary"):
+        if st.button("Run Batch Prediction", type="primary"):
             import time
 
             # Step 1: TF-IDF shortlist for all queries in one shot
@@ -439,7 +436,7 @@ with tab_batch:
                                      model_choice, top_n_batch, concurrency)
 
             elapsed = time.time() - t1
-            prog.progress(1.0, text=f"✅ Done in {elapsed:.1f}s ({tfidf_ms}ms TF-IDF + {elapsed:.1f}s Groq)")
+            prog.progress(1.0, text=f"Done in {elapsed:.1f}s ({tfidf_ms}ms TF-IDF + {elapsed:.1f}s Groq)")
 
             # Build results table
             rows = []
@@ -456,12 +453,12 @@ with tab_batch:
 
             df_out = pd.DataFrame(rows)
             st.dataframe(df_out, use_container_width=True)
-            st.download_button("⬇️ Download Results CSV",
+            st.download_button("Download Results CSV",
                                df_out.to_csv(index=False).encode(),
                                "predictions.csv", "text/csv")
 
     else:
-        if st.button("▶️ Try sample data"):
+        if st.button("Try sample data"):
             sample = ["Sony WH-1000XM5 Wireless Headphones",
                       "Instant Pot Duo 7-in-1 Pressure Cooker",
                       "Baggy Unit Denim Jeans Men",
@@ -480,7 +477,7 @@ with tab_batch:
                 all_preds = run_parallel(queries_s, all_cands, api_key, model_choice, 1, concurrency)
                 elapsed = time.time() - t0
 
-            st.success(f"✅ {len(sample)} products in {elapsed:.1f}s")
+            st.success(f"Processed {len(sample)} products in {elapsed:.1f}s")
             rows = [{"title": t, "brand": b,
                      "predicted": p[0]["category"] if p else "",
                      "score": f"{p[0]['score']:.1%}" if p else ""}
@@ -489,7 +486,7 @@ with tab_batch:
 
 # ── Explore ────────────────────────────────────────────────────────────────────
 with tab_explore:
-    st.markdown("### 🗂️ Explore Category Map")
+    st.markdown("### Explore Category Map")
     tops = sorted(set(p.split(" / ")[0] for p in all_paths))
     c1, c2, c3 = st.columns(3)
     c1.metric("Total Paths", f"{len(all_paths):,}")
@@ -497,7 +494,7 @@ with tab_explore:
     c3.metric("Top-level Groups", len(tops))
 
     st.markdown("---")
-    search = st.text_input("🔎 Search", placeholder="e.g. Jeans, Headphones…")
+    search = st.text_input("Search", placeholder="e.g. Jeans, Headphones…")
     if search:
         results = [p for p in all_paths if search.lower() in p.lower()]
         st.markdown(f"**{len(results):,} matches:**")
