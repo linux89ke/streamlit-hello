@@ -224,21 +224,49 @@ with tab_single:
 
 # ── Batch ──────────────────────────────────────────────────────────────────────
 with tab_batch:
-    st.markdown("### Batch predict from a CSV file")
-    uploaded = st.file_uploader("Upload CSV", type=["csv"])
+    st.markdown("### Batch predict")
+    top_n_batch  = st.slider("Top N per product", 1, 5, 3, key="batch_topn")
+    input_mode   = st.radio("Input method", ["📂 Upload file (CSV or Excel)", "📋 Paste a list"], horizontal=True)
 
-    if uploaded:
-        df_input = pd.read_csv(uploaded)
-        st.dataframe(df_input.head(5), use_container_width=True)
-        text_col    = st.selectbox("Text column", df_input.columns.tolist())
-        top_n_batch = st.slider("Top N per product", 1, 5, 3, key="batch_topn")
+    texts = []
 
+    if input_mode == "📂 Upload file (CSV or Excel)":
+        uploaded = st.file_uploader("Upload CSV or Excel file", type=["csv", "xlsx", "xls"])
+        if uploaded:
+            try:
+                if uploaded.name.endswith((".xlsx", ".xls")):
+                    df_input = pd.read_excel(uploaded)
+                else:
+                    try:
+                        df_input = pd.read_csv(uploaded, encoding="utf-8")
+                    except UnicodeDecodeError:
+                        uploaded.seek(0)
+                        df_input = pd.read_csv(uploaded, encoding="latin-1")
+                st.dataframe(df_input.head(5), use_container_width=True)
+                text_col = st.selectbox("Which column has product titles?", df_input.columns.tolist())
+                texts = df_input[text_col].astype(str).dropna().tolist()
+                st.caption(f"{len(texts):,} products ready.")
+            except Exception as e:
+                st.error(f"Could not read file: {e}")
+        else:
+            st.markdown("Supports `.csv`, `.xlsx`, `.xls` — needs at least one column with product titles.")
+
+    else:
+        pasted = st.text_area(
+            "Paste one product title per line:",
+            height=200,
+            placeholder="Nike Air Max 270 Men's Running Shoes\nKitchenAid Stand Mixer 5qt\nSony WH-1000XM5 Headphones",
+        )
+        if pasted.strip():
+            texts = [t.strip() for t in pasted.strip().splitlines() if t.strip()]
+            st.caption(f"{len(texts):,} products ready.")
+
+    if texts:
         if st.button("🚀 Run Batch Prediction", type="primary"):
-            texts = df_input[text_col].astype(str).tolist()
-            prog  = st.progress(0, text="Starting…")
-            rows  = []
+            prog = st.progress(0, text="Starting…")
+            rows = []
             for i, text in enumerate(texts):
-                prog.progress(i / len(texts), text=f"Row {i+1} of {len(texts)}…")
+                prog.progress((i + 1) / len(texts), text=f"Predicting {i+1} of {len(texts)}: {text[:60]}…")
                 try:
                     preds = predict_groq(text, api_key, top_n_batch, model_choice)
                     rows.append({
@@ -249,20 +277,11 @@ with tab_batch:
                     })
                 except Exception as e:
                     rows.append({"input_text": text, "top_category": f"ERROR: {e}", "top_score": 0, "top_3": ""})
-            prog.progress(1.0, text="Done!")
+            prog.progress(1.0, text=f"✅ Done — {len(rows):,} products predicted!")
             df_out = pd.DataFrame(rows)
-            st.success(f"✅ Predicted {len(df_out):,} products.")
             st.dataframe(df_out, use_container_width=True)
-            st.download_button("⬇️ Download CSV", df_out.to_csv(index=False).encode(), "predictions.csv", "text/csv")
+            st.download_button("⬇️ Download Results CSV", df_out.to_csv(index=False).encode(), "predictions.csv", "text/csv")
     else:
-        st.markdown("""
-        **Expected CSV format:**
-        ```
-        title
-        Nike Air Max 270 Men's Running Shoes
-        KitchenAid Stand Mixer 5qt
-        ```
-        """)
         if st.button("▶️ Try sample data"):
             sample = [
                 "Sony WH-1000XM5 Wireless Noise Canceling Headphones",
@@ -271,16 +290,18 @@ with tab_batch:
                 "The Great Gatsby Paperback – F. Scott Fitzgerald",
                 "Fitbit Charge 5 Advanced Fitness & Health Tracker",
             ]
-            with st.spinner("Asking Groq…"):
+            prog = st.progress(0, text="Starting…")
+            rows = []
+            for i, text in enumerate(sample):
+                prog.progress((i + 1) / len(sample), text=f"Predicting {i+1} of {len(sample)}: {text[:60]}…")
                 try:
-                    rows = []
-                    for text in sample:
-                        preds = predict_groq(text, api_key, 3, model_choice)
-                        rows.append({
-                            "title": text,
-                            "top_category": preds[0]["category"] if preds else "",
-                            "predictions": " | ".join(f"{p['category']} ({p['score']:.1%})" for p in preds[:3]),
-                        })
-                    st.dataframe(pd.DataFrame(rows), use_container_width=True)
+                    preds = predict_groq(text, api_key, top_n_batch, model_choice)
+                    rows.append({
+                        "title": text,
+                        "top_category": preds[0]["category"] if preds else "",
+                        "predictions": " | ".join(f"{p['category']} ({p['score']:.1%})" for p in preds[:3]),
+                    })
                 except Exception as e:
-                    st.error(f"Failed: {e}")
+                    rows.append({"title": text, "top_category": f"ERROR: {e}", "predictions": ""})
+            prog.progress(1.0, text="✅ Done!")
+            st.dataframe(pd.DataFrame(rows), use_container_width=True)
