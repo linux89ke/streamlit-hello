@@ -89,14 +89,14 @@ def load_or_build_index(file_path: str, cache_file="category_index.pkl"):
     return result
 
 
-def shortlist(query: str, leaves, vectorizer, matrix, k: int = 30) -> list[str]:
+def shortlist(query: str, leaves, vectorizer, matrix, k: int = 15) -> list[str]:
     qvec = vectorizer.transform([query])
     sims = cosine_similarity(qvec, matrix)[0]
     top_idx = np.argsort(sims)[::-1][:k]
     return [leaves[i] for i in top_idx if sims[i] > 0]
 
 
-def batch_shortlist(queries: list[str], leaves, vectorizer, matrix, k: int = 30) -> list[list[str]]:
+def batch_shortlist(queries: list[str], leaves, vectorizer, matrix, k: int = 15) -> list[list[str]]:
     """Vectorise all queries in one matrix op — much faster than looping."""
     qmat = vectorizer.transform(queries)
     sims = cosine_similarity(qmat, matrix)          # (n_queries, n_leaves)
@@ -290,8 +290,10 @@ with st.sidebar:
         help="8b is fastest and free. 70b is most accurate.",
     )
     top_n        = st.slider("Top N results", 1, 10, 5)
-    shortlist_k  = st.slider("Shortlist size", 10, 50, 30,
-                             help="Candidates sent to Groq per product. 30 is optimal.")
+    
+    # Updated shortlist default to 15, lowered min to 5
+    shortlist_k  = st.slider("Shortlist size", 5, 50, 15,
+                             help="Candidates sent to Groq per product. 15 provides a great balance of cost and accuracy.")
     concurrency  = st.slider("Parallel requests", 1, 30, 10,
                              help="How many Groq calls run simultaneously. Free tier: keep <= 30.")
     score_threshold = st.slider("Min confidence", 0.0, 1.0, 0.0, 0.05)
@@ -301,7 +303,7 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("""### How it works
 **Step 1 - TF-IDF** (free, ~10ms total for any batch)
-Shortlists 30 leaf candidates per product in one matrix op.
+Shortlists 15 leaf candidates per product in one matrix op.
 
 **Step 2 - Groq async** (all products fire simultaneously)
 Parallel calls return together in ~2s regardless of batch size.
