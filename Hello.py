@@ -1,6 +1,6 @@
 """
 Product Category Predictor
-Strategy : TF-IDF shortlist (instant) + async parallel Groq reranking
+Strategy : Semantic Embeddings shortlist + async parallel Groq reranking
 Speed    : all products run concurrently, ~2-5s for any batch size
 Cost     : 1 Groq call per product
 """
@@ -14,9 +14,12 @@ import numpy as np
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from groq import AsyncGroq, Groq
+
+# New imports for auto-retries and semantic search
+from tenacity import retry, stop_after_attempt, wait_exponential
+from sentence_transformers import SentenceTransformer
 
 st.set_page_config(
     page_title="Product Category Predictor", 
@@ -39,48 +42,44 @@ st.markdown("""
     }
     .stTextArea textarea { border-radius:10px !important; border:2px solid #e0e0f0 !important; }
     .stTextArea textarea:focus { border-color:#f55036 !important; }
-    .speed-badge {
-        display:inline-block; background:#e6f4ea; color:#1e7e34;
-        font-size:0.75rem; font-weight:700; padding:2px 10px;
-        border-radius:20px; margin-left:8px;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ─── TF-IDF index ─────────────────────────────────────────────────────────────
+# ─── Semantic Search Index ────────────────────────────────────────────────────
 
-def path_to_doc(path: str) -> str:
-    parts = path.split(" / ")
-    return " ".join(parts) + " " + " ".join(parts[-3:]) * 2
+@st.cache_resource(show_spinner=False)
+def get_embedding_model():
+    # all-MiniLM-L6-v2 is fast, lightweight, and highly accurate for semantic search
+    return SentenceTransformer('all-MiniLM-L6-v2')
 
 
 @st.cache_resource(show_spinner=False)
 def load_or_build_index(file_path: str, cache_file="category_index.pkl"):
+    model = get_embedding_model()
+    
     # If the pre-computed index exists on disk, load it instantly
     if os.path.exists(cache_file):
         with open(cache_file, "rb") as f:
             return pickle.load(f)
 
-    # Otherwise, build it from the Excel file
+    # Otherwise, build it from the Excel/CSV file
     try:
         df = pd.read_excel(file_path)
     except Exception:
-        # Fallback in case the file is actually a CSV with an .xlsx extension
         df = pd.read_csv(file_path)
         
-    # Extract the third column (Category Path) as per original logic
     all_paths = df.iloc[:, 2].dropna().astype(str).tolist()
-    
     path_set  = set(all_paths)
-    leaves    = [p for p in all_paths
-                 if not any(other.startswith(p + " / ") for other in path_set)]
-    docs      = [path_to_doc(p) for p in leaves]
+    leaves    = [p for p in all_paths if not any(other.startswith(p + " / ") for other in path_set)]
     
-    vectorizer = TfidfVectorizer(ngram_range=(1, 2), min_df=1, sublinear_tf=True)
-    matrix     = vectorizer.fit_transform(docs)
+    # We replace "/" with spaces so the model reads it as a fluid sentence of concepts
+    docs = [p.replace(" / ", " ") for p in leaves]
     
-    result = (leaves, vectorizer, matrix, all_paths)
+    # Encode the category paths into semantic vectors
+    matrix = model.encode(docs, show_progress_bar=False)
+    
+    result = (leaves, matrix, all_paths)
     
     # Save to disk for future runs
     with open(cache_file, "wb") as f:
@@ -89,17 +88,18 @@ def load_or_build_index(file_path: str, cache_file="category_index.pkl"):
     return result
 
 
-def shortlist(query: str, leaves, vectorizer, matrix, k: int = 15) -> list[str]:
-    qvec = vectorizer.transform([query])
+def shortlist(query: str, leaves, matrix, k: int = 15) -> list[str]:
+    model = get_embedding_model()
+    qvec = model.encode([query])
     sims = cosine_similarity(qvec, matrix)[0]
     top_idx = np.argsort(sims)[::-1][:k]
     return [leaves[i] for i in top_idx if sims[i] > 0]
 
 
-def batch_shortlist(queries: list[str], leaves, vectorizer, matrix, k: int = 15) -> list[list[str]]:
-    """Vectorise all queries in one matrix op — much faster than looping."""
-    qmat = vectorizer.transform(queries)
-    sims = cosine_similarity(qmat, matrix)          # (n_queries, n_leaves)
+def batch_shortlist(queries: list[str], leaves, matrix, k: int = 15) -> list[list[str]]:
+    model = get_embedding_model()
+    qmat = model.encode(queries, show_progress_bar=False)
+    sims = cosine_similarity(qmat, matrix)          
     results = []
     for row in sims:
         top_idx = np.argsort(row)[::-1][:k]
@@ -109,15 +109,24 @@ def batch_shortlist(queries: list[str], leaves, vectorizer, matrix, k: int = 15)
 
 # ─── Async Groq reranking ─────────────────────────────────────────────────────
 
+# We added Few-Shot Prompting here to fix the "Sets" vs "Single Items" issue.
 SYSTEM_TEMPLATE = """You are a product categorization expert.
 Given a product title and a list of candidate category paths, pick the {top_n} best matching categories.
-Consider brand, product type, gender, style, material.
+Consider brand, product type, gender, style, material, and QUANTITY.
 
-Respond with JSON only:
+CRITICAL RULE: Pay attention to plurals, packs, and sets. If a product is a single item, DO NOT put it in a "Sets" category. If it is a set, DO NOT put it in a single item category.
+
+EXAMPLE INPUT:
+Product: "Acrylic Fruit and Salad Bowl with Gold Rim Elegant Transparent Serving Bowl"
+Candidates:
+- Home & Kitchen / Kitchen & Dining / Dining & Entertaining / Serveware / Salad Serving Sets
+- Home & Kitchen / Kitchen & Dining / Dining & Entertaining / Serveware / Serving Bowls
+
+EXAMPLE OUTPUT:
 {{
   "categories": [
-    {{"category": "<full path>", "score": 0.95}},
-    ...
+    {{"category": "Home & Kitchen / Kitchen & Dining / Dining & Entertaining / Serveware / Serving Bowls", "score": 0.98}},
+    {{"category": "Home & Kitchen / Kitchen & Dining / Dining & Entertaining / Serveware / Salad Serving Sets", "score": 0.05}}
   ]
 }}
 
@@ -127,7 +136,8 @@ Rules:
 - Scores are floats 0.0–1.0
 - JSON only, nothing else"""
 
-
+# Added auto-retry logic: retries up to 3 times, waiting exponentially (2s, 4s, 8s) if Groq drops the connection.
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
 async def async_rerank(
     idx: int,
     query: str,
@@ -140,23 +150,20 @@ async def async_rerank(
     """Rerank candidates for a single product. Returns (original_index, results)."""
     async with semaphore:
         cand_list = "\n".join(f"- {c}" for c in candidates)
-        try:
-            resp = await client.chat.completions.create(
-                model=model,
-                temperature=0.1,
-                response_format={"type": "json_object"},
-                messages=[
-                    {"role": "system",
-                     "content": SYSTEM_TEMPLATE.format(top_n=top_n)},
-                    {"role": "user",
-                     "content": f"Product: {query}\n\nCandidates:\n{cand_list}"},
-                ],
-            )
-            raw  = resp.choices[0].message.content.strip()
-            data = json.loads(raw).get("categories", [])
-            return idx, data
-        except Exception as e:
-            return idx, [{"category": f"ERROR: {e}", "score": 0.0}]
+        resp = await client.chat.completions.create(
+            model=model,
+            temperature=0.1,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system",
+                 "content": SYSTEM_TEMPLATE.format(top_n=top_n)},
+                {"role": "user",
+                 "content": f"Product: {query}\n\nCandidates:\n{cand_list}"},
+            ],
+        )
+        raw  = resp.choices[0].message.content.strip()
+        data = json.loads(raw).get("categories", [])
+        return idx, data
 
 
 async def parallel_predict(
@@ -170,24 +177,27 @@ async def parallel_predict(
     """Fire all Groq calls concurrently, bounded by semaphore."""
     client    = AsyncGroq(api_key=api_key)
     semaphore = asyncio.Semaphore(concurrency)
-    tasks     = [
-        async_rerank(i, q, c, client, model, top_n, semaphore)
-        for i, (q, c) in enumerate(zip(queries, candidates_list))
-    ]
+    tasks     = []
+    
+    for i, (q, c) in enumerate(zip(queries, candidates_list)):
+        # Wrap the async_rerank in a try-except to catch cases where all 3 retries fail
+        async def safe_rerank(idx, query, cands):
+            try:
+                return await async_rerank(idx, query, cands, client, model, top_n, semaphore)
+            except Exception as e:
+                return idx, [{"category": f"API ERROR: {e}", "score": 0.0}]
+        tasks.append(safe_rerank(i, q, c))
+        
     results_raw = await asyncio.gather(*tasks)
-    # Re-sort by original index (gather preserves order but let's be safe)
     ordered = sorted(results_raw, key=lambda x: x[0])
     return [r for _, r in ordered]
 
 
 def run_parallel(queries, candidates_list, api_key, model, top_n, concurrency):
-    """Streamlit-safe wrapper — creates a fresh event loop."""
     return asyncio.run(
         parallel_predict(queries, candidates_list, api_key, model, top_n, concurrency)
     )
 
-
-# ─── Sync single predict (for single tab) ────────────────────────────────────
 
 def sync_rerank(query, candidates, api_key, model, top_n):
     client    = Groq(api_key=api_key)
@@ -287,40 +297,33 @@ with st.sidebar:
         "Groq model",
         ["llama-3.1-8b-instant", "llama-3.3-70b-versatile", "mixtral-8x7b-32768"],
         index=0,
-        help="8b is fastest and free. 70b is most accurate.",
     )
     top_n        = st.slider("Top N results", 1, 10, 5)
-    
-    # Updated shortlist default to 15, lowered min to 5
     shortlist_k  = st.slider("Shortlist size", 5, 50, 15,
-                             help="Candidates sent to Groq per product. 15 provides a great balance of cost and accuracy.")
-    concurrency  = st.slider("Parallel requests", 1, 30, 10,
-                             help="How many Groq calls run simultaneously. Free tier: keep <= 30.")
+                             help="Candidates sent to Groq per product.")
+    concurrency  = st.slider("Parallel requests", 1, 30, 10)
     score_threshold = st.slider("Min confidence", 0.0, 1.0, 0.0, 0.05)
     show_chart   = st.checkbox("Show confidence chart", value=True)
     show_hierarchy = st.checkbox("Show category hierarchy", value=True)
 
     st.markdown("---")
-    st.markdown("""### How it works
-**Step 1 - TF-IDF** (free, ~10ms total for any batch)
-Shortlists 15 leaf candidates per product in one matrix op.
-
-**Step 2 - Groq async** (all products fire simultaneously)
-Parallel calls return together in ~2s regardless of batch size.
-
-**Result:** 100 products in ~5s instead of ~200s.""")
-
+    st.markdown("""### Updates
+- **Semantic Search:** Understands context and meaning.
+- **Few-Shot Prompting:** Trained to avoid putting single items into 'Set' categories.
+- **Auto-Retries:** Automatically retries API calls if they fail.
+- **Interactive Tables:** You can edit the results grid before downloading.
+""")
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 st.markdown('<p class="main-title">Product Category Predictor</p>', unsafe_allow_html=True)
-st.markdown('<p class="subtitle">TF-IDF shortlist + async parallel Groq — fast, accurate, 1 API call per product.</p>', unsafe_allow_html=True)
+st.markdown('<p class="subtitle">Semantic shortlist + async parallel Groq — fast, accurate, 1 API call per product.</p>', unsafe_allow_html=True)
 
 if not api_key:
     st.info("Enter your Groq API key in the sidebar.")
     st.stop()
 
-# Ensure local Excel file exists or cached pickle exists
+# Ensure local file exists or cached pickle exists
 excel_path = "category_map1.xlsx"
 cache_path = "category_index.pkl"
 
@@ -328,8 +331,9 @@ if not os.path.exists(excel_path) and not os.path.exists(cache_path):
     st.error(f"Required file '{excel_path}' not found in the script directory.")
     st.stop()
 
-with st.spinner("Loading category index..."):
-    leaves, vectorizer, matrix, all_paths = load_or_build_index(excel_path, cache_path)
+with st.spinner("Loading semantic category index..."):
+    # Note: `vectorizer` is no longer needed since we use embeddings directly
+    leaves, matrix, all_paths = load_or_build_index(excel_path, cache_path)
 
 st.success(f"Successfully loaded {len(leaves):,} leaf categories.")
 
@@ -338,12 +342,11 @@ st.success(f"Successfully loaded {len(leaves):,} leaf categories.")
 tab_single, tab_batch, tab_explore = st.tabs(["Single Predict", "Batch Predict", "Explore"])
 
 EXAMPLES = [
-    "Baggy Unit Denim Jeans Men's Streetwear",
+    "Acrylic Fruit and Salad Bowl with Gold Rim",
     "AirPods Pro 2nd Generation Wireless Earbuds",
     "LEGO Star Wars Skywalker Saga Nintendo Switch",
     "KitchenAid 5-Quart Artisan Stand Mixer",
     "Harry Potter Sorcerer's Stone Hardcover",
-    "Hydro Boost Face Moisturizer SPF 25",
 ]
 
 # ── Single ─────────────────────────────────────────────────────────────────────
@@ -368,14 +371,13 @@ with tab_single:
         brand = st.text_input(
             "Brand *(optional)*",
             placeholder="e.g. Nike",
-            help="Helps Groq disambiguate — e.g. Apple -> Electronics not Grocery.",
         )
 
     if st.button("Predict", type="primary", use_container_width=True):
         if product_text.strip():
             query = f"{brand.strip()} {product_text.strip()}".strip() if brand.strip() else product_text.strip()
             with st.spinner("Shortlisting..."):
-                candidates = shortlist(query, leaves, vectorizer, matrix, shortlist_k)
+                candidates = shortlist(query, leaves, matrix, shortlist_k)
             with st.spinner(f"Asking Groq ({len(candidates)} candidates)..."):
                 try:
                     preds = sync_rerank(query, candidates, api_key, model_choice, top_n)
@@ -445,18 +447,16 @@ with tab_batch:
         if st.button("Run Batch Prediction", type="primary"):
             import time
 
-            # Step 1: TF-IDF shortlist for all queries in one shot
             queries = [
                 f"{b.strip()} {t.strip()}".strip() if b.strip() else t.strip()
                 for t, b in zip(texts, brands)
             ]
 
-            with st.spinner(f"Step 1: Shortlisting {len(queries)} products (TF-IDF)..."):
+            with st.spinner(f"Step 1: Shortlisting {len(queries)} products (Semantic Search)..."):
                 t0 = time.time()
-                all_candidates = batch_shortlist(queries, leaves, vectorizer, matrix, shortlist_k)
+                all_candidates = batch_shortlist(queries, leaves, matrix, shortlist_k)
                 tfidf_ms = int((time.time() - t0) * 1000)
 
-            # Step 2: parallel Groq calls
             prog    = st.progress(0, text="Step 2: Sending all Groq calls in parallel...")
             t1      = time.time()
 
@@ -464,7 +464,7 @@ with tab_batch:
                                      model_choice, top_n_batch, concurrency)
 
             elapsed = time.time() - t1
-            prog.progress(1.0, text=f"Done in {elapsed:.1f}s ({tfidf_ms}ms TF-IDF + {elapsed:.1f}s Groq)")
+            prog.progress(1.0, text=f"Done in {elapsed:.1f}s ({tfidf_ms}ms Search + {elapsed:.1f}s Groq)")
 
             # Build results table
             rows = []
@@ -480,37 +480,14 @@ with tab_batch:
                 })
 
             df_out = pd.DataFrame(rows)
-            st.dataframe(df_out, use_container_width=True)
+            
+            # Use st.data_editor instead of st.dataframe to allow the user to make manual corrections
+            st.markdown("#### Review Results (Click any cell to edit)")
+            edited_df = st.data_editor(df_out, use_container_width=True, num_rows="dynamic")
+            
             st.download_button("Download Results CSV",
-                               df_out.to_csv(index=False).encode(),
+                               edited_df.to_csv(index=False).encode(),
                                "predictions.csv", "text/csv")
-
-    else:
-        if st.button("Try sample data"):
-            sample = ["Sony WH-1000XM5 Wireless Headphones",
-                      "Instant Pot Duo 7-in-1 Pressure Cooker",
-                      "Baggy Unit Denim Jeans Men",
-                      "Harry Potter Hardcover Book",
-                      "Apple AirPods Pro",
-                      "Nike Air Max 270 Running Shoes"]
-            s_brands = ["Sony", "Instant Pot", "", "", "Apple", "Nike"]
-
-            queries_s = [f"{b} {t}".strip() for t, b in zip(sample, s_brands)]
-            with st.spinner("Shortlisting..."):
-                all_cands = batch_shortlist(queries_s, leaves, vectorizer, matrix, shortlist_k)
-
-            with st.spinner(f"Running {len(sample)} Groq calls in parallel..."):
-                import time
-                t0 = time.time()
-                all_preds = run_parallel(queries_s, all_cands, api_key, model_choice, 1, concurrency)
-                elapsed = time.time() - t0
-
-            st.success(f"Processed {len(sample)} products in {elapsed:.1f}s")
-            rows = [{"title": t, "brand": b,
-                     "predicted": p[0]["category"] if p else "",
-                     "score": f"{p[0]['score']:.1%}" if p else ""}
-                    for t, b, p in zip(sample, s_brands, all_preds)]
-            st.dataframe(pd.DataFrame(rows), use_container_width=True)
 
 # ── Explore ────────────────────────────────────────────────────────────────────
 with tab_explore:
